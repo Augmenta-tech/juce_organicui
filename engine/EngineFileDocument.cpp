@@ -59,9 +59,16 @@ void Engine::createNewGraph() {
 
 	handleAsyncUpdate();
 
-
+	// TODO: This is already called in handleAsyncUpdate
 	engineListeners.call(&EngineListener::fileLoaded);
 	engineNotifier.addMessage(new EngineEvent(EngineEvent::FILE_LOADED, this));
+
+#if ORGANICUI_USE_WEBSERVER
+	if (notifyRemoteControlOnClear)
+	{
+		OSCRemoteControl::getInstance()->sendPathChangedFeedback(getControlAddress());
+	}
+#endif
 }
 
 Result Engine::loadDocument(const File& file) {
