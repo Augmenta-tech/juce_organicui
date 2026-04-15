@@ -43,17 +43,19 @@ EnumParameter::~EnumParameter()
 
 EnumParameter* EnumParameter::addOption(String key, var data, bool selectIfFirstOption)
 {
-	GenericScopedLock lock(enumValues.getLock());
-	enumValues.add(new EnumValue(key, data));
-	if (enumValues.size() == 1 && selectIfFirstOption)
 	{
-		defaultValue = key;
-		setValue(key, true, false, false);
+		GenericScopedLock lock(enumValues.getLock());
+		enumValues.add(new EnumValue(key, data));
+		if (enumValues.size() == 1 && selectIfFirstOption)
+		{
+			defaultValue = key;
+			setValue(key, true, false, false);
+		}
+		updateArgDescription();
 	}
 
 	enumListeners.call(&EnumParameterListener::enumOptionAdded, this, key);
 	enumParameterNotifier.addMessage(new EnumParameterEvent(EnumParameterEvent::ENUM_OPTION_ADDED, this));
-	updateArgDescription();
 	return this;
 }
 
@@ -79,11 +81,14 @@ void EnumParameter::updateOption(int index, String key, var data, bool addIfNotT
 
 void EnumParameter::removeOption(String key)
 {
-	GenericScopedLock lock(enumValues.getLock());
-	enumValues.remove(getIndexForKey(key));
-	enumListeners.call(&EnumParameterListener::enumOptionRemoved, this, key);
+	{
+		GenericScopedLock lock(enumValues.getLock());
+		enumValues.remove(getIndexForKey(key));
+		updateArgDescription();
+	}
+
 	enumParameterNotifier.addMessage(new EnumParameterEvent(EnumParameterEvent::ENUM_OPTION_REMOVED, this));
-	updateArgDescription();
+	enumListeners.call(&EnumParameterListener::enumOptionRemoved, this, key);
 
 	if (getValueKey() == key) setValue("");
 }
@@ -101,9 +106,11 @@ void EnumParameter::setOptions(Array<EnumValue> options)
 
 void EnumParameter::clearOptions()
 {
-	GenericScopedLock lock(enumValues.getLock());
 	StringArray keysToRemove;
-	for (auto& ev : enumValues) keysToRemove.add(ev->key);
+	{
+		GenericScopedLock lock(enumValues.getLock());
+		for (auto& ev : enumValues) keysToRemove.add(ev->key);
+	}
 	for (auto& k : keysToRemove) removeOption(k);
 }
 
