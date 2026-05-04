@@ -137,9 +137,30 @@ public:
     }
 
     // allow to stack all values or get oly last updated value
-    void addListener(Listener* newListener) { listeners.add(newListener); }
-    void addAsyncCoalescedListener(Listener* newListener) { lastListeners.add(newListener); }
-    void removeListener(Listener* listener) { listeners.remove(listener);lastListeners.remove(listener); }
+    void addListener(Listener* newListener) 
+    {
+		if (isBeingDestroyed.load(std::memory_order_acquire))
+			return;
+        
+        listeners.add(newListener); 
+    }
+
+    void addAsyncCoalescedListener(Listener* newListener) 
+    {
+		if (isBeingDestroyed.load(std::memory_order_acquire))
+			return;
+		
+        lastListeners.add(newListener);
+	}
+
+    void removeListener(Listener* listener) 
+    { 
+        if (isBeingDestroyed.load(std::memory_order_acquire))
+			return;
+        
+        listeners.remove(listener);
+        lastListeners.remove(listener); 
+    }
 
     void clearQueue()
     {
