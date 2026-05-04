@@ -37,7 +37,9 @@ GlobalSettings::GlobalSettings() :
 	launchMinimised = startupCC.addBoolParameter("Launch minimized", "If checked, this app will automatically minimized it self when launched", false);
 	allowMultipleInstances = startupCC.addBoolParameter("Allow Multiple Instances", "If checked, it will be possible to launch multiple instances of this application at the same time (not working on Mac, you would have to actually duplicate the app)", false);
 	checkUpdatesOnStartup = startupCC.addBoolParameter("Check updates on startup", "If enabled, app will check if any updates are available", true);
-	checkBetaUpdates = startupCC.addBoolParameter("Check for beta updates", "If enabled the app will also check for beta versions of the software", false);
+	updateChannel = startupCC.addEnumParameter("Update Channel", "Channel to pull software updates from");
+	updateChannel->addOption("Stable", "stableversion")->addOption("Beta", "betaversion");
+
 	updateHelpOnStartup = startupCC.addBoolParameter("Update help on startup", "If enabled, app will try and download the last help file locally", true);
 
 	openLastDocumentOnStartup = startupCC.addBoolParameter("Load last " + (Engine::mainEngine != nullptr ? Engine::mainEngine->fileExtension : "") + " on startup", "If enabled, app will load the last " + Engine::mainEngine->fileExtension + " on startup", false);
