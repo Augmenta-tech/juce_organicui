@@ -31,6 +31,9 @@ public:
 	std::unique_ptr<InspectableSelectionManager> selectionManager;
 
 
+	juce::String updateChannel;
+
+	// For compatibility purposes. Please use updateChannel instead of this variables for new features.
 	bool isBetaVersion;
 	int betaVersion;
 

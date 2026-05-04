@@ -35,8 +35,23 @@ Engine::Engine(const String& fileName, const String& fileExtension) :
 	isClearing(false)
 {
 	//skipControllableNameInAddress = true;
-	isBetaVersion = getAppVersion().containsChar('b');
-	betaVersion = getBetaVersion(getAppVersion());
+
+	// Set channel update
+	String version = getAppVersion();
+	std::string stdversion = version.toStdString();
+	auto firstAlphaCharacter = std::find_if(std::begin(stdversion), std::end(stdversion), ::isalpha);
+	auto firstNotAlphaCharacter = std::find_if_not(firstAlphaCharacter, std::end(stdversion), ::isalpha);
+	updateChannel = stdversion.substr(firstAlphaCharacter - std::begin(stdversion), firstNotAlphaCharacter - firstAlphaCharacter);
+	if (updateChannel.isEmpty())
+	{
+		updateChannel = "stableversion";
+	}
+	if (updateChannel == "b")
+	{
+		isBetaVersion = true;
+		updateChannel = "betaversion";
+		betaVersion = getBetaVersion(version);
+	}
 
 	selectionManager.reset(new InspectableSelectionManager(true)); //selectionManager constructor
 

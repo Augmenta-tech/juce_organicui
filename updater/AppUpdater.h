@@ -73,6 +73,9 @@ public:
 	juce::String filePrefix;
 	juce::File targetDir;
 	juce::var updateData;
+	juce::String targetChannel;
+	juce::String latestVersion;
+	juce::Value updateAvailable;
 
 	std::unique_ptr<UpdateDialogWindow> updateWindow;
 	std::unique_ptr<FloatParameter> progression;
@@ -89,6 +92,9 @@ public:
 	void showDialog(juce::StringRef version, bool beta, juce::StringRef title, juce::StringRef msg, juce::StringRef changelog);
 	void downloadUpdate();
 
+	/// @brief Update targetChannel, latestVersion and updateAvailable after checking online
+	/// @return true if there was no error
+	bool updateTargetChannelLatestVersionAndUpdateAvailable();
 
 	// Inherited via Thread
 	virtual void run() override;
