@@ -164,6 +164,10 @@ void GlobalSettings::onControllableFeedbackUpdate(ControllableContainer* cc, Con
 	{
 		getApp().mainWindow->setAlwaysOnTop(alwaysOnTop->boolValue());
 	}
+	else if (c == updateChannel)
+	{
+		AppUpdater::getInstance()->run();
+	}
 
 
 	if (Engine::mainEngine != nullptr) Engine::mainEngine->setChangedFlag(false); //force no need to save when changing something in global settings
