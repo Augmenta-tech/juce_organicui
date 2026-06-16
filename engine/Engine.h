@@ -94,11 +94,25 @@ public:
 	void loadJSONDataEngine(juce::var data, ProgressTask* loadingTask);
 	virtual void loadJSONDataInternalEngine(juce::var data, ProgressTask* loadingTask) {}
 
+	/// @brief Read the software version used to save a file
+	/// and returns whether it is newer than the minimum required file version
+	/// @param checkForNewerVersion Compare agains the *current* version instead
 	bool checkFileVersion(juce::DynamicObject* metaData, bool checkForNewerVersion = false);
-	bool versionIsNewerThan(juce::String versionToCheck, juce::String referenceVersion);
-	int getBetaVersion(juce::String version);
-	bool versionNeedsOnlineUpdate(juce::String version);
+	bool versionIsNewerThan(const juce::String& versionToCheck, const juce::String& referenceVersion) const;
+	int getBetaVersion(const juce::String& version) const;
+
+	/// @brief Returns the version before which migrations are not supported at all
 	virtual juce::String getMinimumRequiredFileVersion();
+
+	/// @brief Returns true if breaking changes have happened between the given version and the current one
+	bool versionNeedsFormatMigration(const juce::String& fromVersion) const;
+	
+	/// @brief Returns true if we can perform the migration from a given version to the current one
+	virtual bool isFileFormatMigrationSupported(const juce::String& fromVersion) const;
+
+	/// @brief Migrate a file to be compatible for the current version
+	/// @return Whether the migration was completed successfuly
+	virtual bool migrateFileToCurrentVersion(const juce::String& inVersion, const juce::var& inFileData, juce::var* outFileData) const;
 
 	juce::int64 loadingStartTime;
 
