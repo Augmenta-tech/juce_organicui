@@ -230,10 +230,10 @@ void AppUpdater::run()
 		for (int i = oldChangelogs->size() - 1; i >= 0; i--)
 		{
 			var ch = oldChangelogs->getUnchecked(i);
-			String chVersion = ch.getProperty("version", "1.0.0");
-			if (Engine::mainEngine->versionIsNewerThan(getAppVersion(), chVersion)) break;
+			AppVersion chVersion(ch.getProperty("version", "1.0.0"));
+			if (chVersion < AppVersion(getAppVersion())) break;
 
-			changelogString += "Version " + chVersion + ":\n";
+			changelogString += "Version " + chVersion.toString() + ":\n";
 			Array<var>* versionChangelog = ch.getProperty("changelog", var()).getArray();
 			for (auto& c : *versionChangelog) changelogString += c.toString() + "\n";
 			changelogString += "\n\n";

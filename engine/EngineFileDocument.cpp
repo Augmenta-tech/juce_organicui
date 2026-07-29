@@ -518,9 +518,12 @@ void Engine::loadJSONData(var data, ProgressTask* loadingTask)
 		return;
 	}
 
-	const bool appVersionIsNewerThanFileVersion = versionIsNewerThan(getAppVersion(), versionString);
-	const bool fileVersionRequiresMigration = versionNeedsFormatMigration(versionString);
-	const bool migrationIsPossible = isFileFormatMigrationSupported(versionString);
+	const AppVersion currentVersion(getAppVersion()); 
+	const AppVersion fileVersion(versionString);
+
+	const bool appVersionIsNewerThanFileVersion = fileVersion < currentVersion;
+	const bool fileVersionRequiresMigration = versionNeedsFormatMigration(fileVersion);
+	const bool migrationIsPossible = isFileFormatMigrationSupported(fileVersion);
 	if (appVersionIsNewerThanFileVersion && fileVersionRequiresMigration && migrationIsPossible)
 	{
 		AlertWindow::showAsync(
@@ -574,7 +577,7 @@ void Engine::loadJSONData(var data, ProgressTask* loadingTask)
 	loadJSONDataEngine(data, loadingTask);
 }
 
-bool Engine::migrateFileToCurrentVersion(const String& inFileVersion, const var& inFileData, var* outFileData) const
+bool Engine::migrateFileToCurrentVersion(const AppVersion& inFileVersion, const var& inFileData, var* outFileData) const
 {
 	jassert(outFileData != nullptr);
 
@@ -606,7 +609,7 @@ bool Engine::migrateFileToCurrentVersion(const String& inFileVersion, const var&
 	return true;
 }
 
-bool Engine::isFileFormatMigrationSupported(const String& fromVersion) const 
+bool Engine::isFileFormatMigrationSupported(const AppVersion& fromVersion) const 
 {
 	return convertURL.isNotEmpty();
 }
@@ -670,88 +673,31 @@ bool Engine::checkFileVersion(DynamicObject* metaData, bool checkForNewerVersion
 {
 	if (metaData == nullptr) return false;
 	if (!metaData->hasProperty("version")) return false;
-	String versionToCheck = checkForNewerVersion ? getAppVersion() : getMinimumRequiredFileVersion();
+	AppVersion versionToCheck = checkForNewerVersion ? getAppVersion() : getMinimumRequiredFileVersion();
 	//DBG(metaData->getProperty("version").toString() << " / " << versionToCheck);
 
-	String fVersion = metaData->getProperty("version").toString();
+	AppVersion fVersion = metaData->getProperty("version").toString();
 
 	if (versionToCheck == fVersion && !checkForNewerVersion) return true;
 
-	return versionIsNewerThan(fVersion, versionToCheck);
+	return versionToCheck < fVersion;
 }
 
-bool Engine::versionIsNewerThan(const String& versionToCheck, const String& referenceVersion) const
+bool Engine::versionNeedsFormatMigration(const AppVersion& fromVersion) const
 {
-	bool referenceVersionIsBeta = false;
-	int referenceBetaVersion = 0;
+	const AppVersion currentAppVersion(getAppVersion());
 
-	String refVersion = referenceVersion;
-	// TODO: Refactor this to handle custom versions
-	if (referenceVersion.containsChar('b'))
-	{
-		referenceVersionIsBeta = true;
-		referenceBetaVersion = getBetaVersion(referenceVersion);
-
-		// TODO: This seems buggy
-		refVersion = referenceVersion.substring(0, referenceVersion.length() - 1);
-	}
-
-	bool versionToCheckIsBeta = false;
-	int versionToCheckBetaVersion = 0;
-
-	String checkVersion = versionToCheck;
-	if (versionToCheck.containsChar('b'))
-	{
-		versionToCheckIsBeta = true;
-		versionToCheckBetaVersion = getBetaVersion(versionToCheck);
-
-		checkVersion = versionToCheck.substring(0, versionToCheck.length() - 1);
-	}
-
-	StringArray fileVersionSplit;
-	fileVersionSplit.addTokens(checkVersion, juce::StringRef("."), juce::StringRef("\""));
-
-	StringArray minVersionSplit;
-	minVersionSplit.addTokens(refVersion, juce::StringRef("."), juce::StringRef("\""));
-
-	int maxVersionNumbers = jmax<int>(fileVersionSplit.size(), minVersionSplit.size());
-	while (fileVersionSplit.size() < maxVersionNumbers) fileVersionSplit.add("0");
-	while (minVersionSplit.size() < maxVersionNumbers) minVersionSplit.add("0");
-
-	for (int i = 0; i < maxVersionNumbers; ++i)
-	{
-		int fV = fileVersionSplit[i].getIntValue();
-		int minV = minVersionSplit[i].getIntValue();
-		if (fV > minV) return true;
-		else if (fV < minV) return false;
-	}
-
-	//if equals return false
-	if (versionToCheckIsBeta == referenceVersionIsBeta) return versionToCheckBetaVersion > referenceBetaVersion;
-	return referenceVersionIsBeta;
-}
-
-int Engine::getBetaVersion(const String& version) const
-{
-	if (!version.containsChar('b')) return 0;
-	int indexOfB = version.indexOfChar('b');
-	String vString = version.substring(indexOfB + 1);
-	return vString.getIntValue();
-}
-
-bool Engine::versionNeedsFormatMigration(const String& fromVersion) const
-{
 	int curVersionRange = 0;
 	for (int i = 0; i < breakingChangesVersions.size(); ++i)
 	{
-		if (versionIsNewerThan(breakingChangesVersions[i], getAppVersion())) break;
+		if (currentAppVersion < AppVersion(breakingChangesVersions[i])) break;
 		curVersionRange++;
 	}
 
 	int targetVersionRange = 0;
 	for (int i = 0; i < breakingChangesVersions.size(); ++i)
 	{
-		if (versionIsNewerThan(breakingChangesVersions[i], fromVersion)) break;
+		if (fromVersion < AppVersion(breakingChangesVersions[i])) break;
 		targetVersionRange++;
 	}
 
