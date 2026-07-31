@@ -255,6 +255,7 @@
 
 #include "warning/ui/WarningReporterPanel.h"
 
+#include "engine/AppVersion.h"
 #include "engine/Engine.h"
 
 #include "settings/GlobalSettings.h"

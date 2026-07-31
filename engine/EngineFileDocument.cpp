@@ -507,101 +507,111 @@ void Engine::loadJSONData(var data, ProgressTask* loadingTask)
 		setFile(File());
 		return;
 	}
-	bool versionChecked = checkFileVersion(md);
+
+	const bool fileVersionSupported = checkFileVersion(md);
 
 	String versionString = md->hasProperty("version") ? md->getProperty("version").toString() : "?";
-	if (!versionChecked)
+	if (!fileVersionSupported)
 	{
 		AlertWindow::showMessageBoxAsync(AlertWindow::AlertIconType::WarningIcon, "You're old, dude !", "File version (" + versionString + ") is not supported anymore.\n(Minimum supported version : " + getMinimumRequiredFileVersion() + ")");
 		setFile(File());
 		return;
 	}
 
+	const AppVersion currentVersion(getAppVersion()); 
+	const AppVersion fileVersion(versionString);
 
-	if (convertURL.isNotEmpty())
+	const bool appVersionIsNewerThanFileVersion = fileVersion < currentVersion;
+	const bool fileVersionRequiresMigration = versionNeedsFormatMigration(fileVersion);
+	const bool migrationIsPossible = isFileFormatMigrationSupported(fileVersion);
+	if (appVersionIsNewerThanFileVersion && fileVersionRequiresMigration && migrationIsPossible)
 	{
-		bool appVersionIsNewerThanFileVersion = versionIsNewerThan(getAppVersion(), versionString);
-		if (appVersionIsNewerThanFileVersion)
-		{
-			bool needsOnlineUpdate = versionNeedsOnlineUpdate(versionString);
-
-			if (needsOnlineUpdate)
-			{
-				AlertWindow::showAsync(
-					MessageBoxOptions().withIconType(AlertWindow::QuestionIcon)
-					.withTitle("File compatibility check")
-					.withMessage("Your file has been save with an older version of " + OrganicApplication::getInstance()->getApplicationName() + " (" + versionString + "), some data may be lost if you load it directly. You can choose to update the file online, load it directly or cancel the operation.\nIn any case, your current file will be backed up with \"_backup\" appended to its name.")
-					.withButton("Update")
-					.withButton("Load directly")
-					.withButton("Cancel"),
-					[this, data, loadingTask](int result)
+		AlertWindow::showAsync(
+			MessageBoxOptions()
+				.withIconType(AlertWindow::QuestionIcon)
+				.withTitle("File compatibility check")
+				.withMessage("Your file has been saved with an older version of " + OrganicApplication::getInstance()->getApplicationName() + " (" + versionString + "), some data may be lost if you load it directly. You can choose to update the file online, load it directly or cancel the operation.\nIn any case, your current file will be backed up with \"_backup\" appended to its name.")
+				.withButton("Update")
+				.withButton("Load directly")
+				.withButton("Cancel"),
+				[this, versionString, data, loadingTask](int result)
+				{
+					File f = getFile();
+					if (f.exists())
 					{
-
-
-						File f = getFile();
-						if (f.exists())
-						{
-							File backupF = f.getParentDirectory().getNonexistentChildFile(f.getFileNameWithoutExtension() + "_backup", f.getFileExtension(), true);
-							f.copyFileTo(backupF);
-							LOG("Your original file has been copied to " << backupF.getFullPathName());
-						}
-
-						switch (result)
-						{
-						case 1: //update
-						{
-							data.getDynamicObject()->setProperty("appVersion", getAppVersion());
-							URL url = URL(convertURL).withPOSTData(JSON::toString(data, true));
-							WebInputStream stream(url, true);
-
-							StringArray headers;
-							headers.add("Content-Type : application/json");
-							headers.add("Accept : application/json");
-							headers.add("User-Agent : " + String(ProjectInfo::projectName) + "/1.0");
-
-							String convertedData = stream.withExtraHeaders(headers.joinIntoString("\r\n")).readEntireStreamAsString();
-							if (convertedData.isEmpty())
-							{
-								AlertWindow::showMessageBoxAsync(AlertWindow::AlertIconType::WarningIcon, "Update error", "Could not connect to the update server, please make sure you are connected to internet. You can still reload your file and not update it.", "Well, shit happens");
-								setFile(File());
-								return;
-							}
-
-							LOG(convertedData);
-							var cData = JSON::parse(convertedData);
-
-							if (cData.isVoid())
-							{
-								//DBG(convertedData);
-
-								AlertWindow::showMessageBoxAsync(AlertWindow::AlertIconType::WarningIcon, "Update error", "There is an error with the converted file, the data is badly formatted. I mean, real bad. You can still reload your file and not update it.", "Well, shit happens");
-								setFile(File());
-								return;
-							}
-
-							//continue loading with new data
-
-							loadJSONDataEngine(cData, loadingTask);
-						}
-						break;
-
-						case 2: //load directly
-							//do nothing
-
-							loadJSONDataEngine(data, loadingTask);
-							break;
-						}
-
-
+						File backupF = f.getParentDirectory().getNonexistentChildFile(f.getFileNameWithoutExtension() + "_backup", f.getFileExtension(), true);
+						f.copyFileTo(backupF);
+						LOG("Your original file has been copied to " << backupF.getFullPathName());
 					}
-				);
 
-				return;
-			}
-		}
+					switch (result)
+					{
+					case 1: // update
+					{
+						var migratedFileData;
+						if (migrateFileToCurrentVersion(versionString, data, &migratedFileData))
+						{
+							// continue loading with new data
+							loadJSONDataEngine(migratedFileData, loadingTask);
+						}
+						else 
+						{
+							setFile(File());
+						}
+
+						break;
+					}
+					case 2: // load directly
+					{
+						// do nothing
+						loadJSONDataEngine(data, loadingTask);
+						break;
+					}
+					}
+				}
+		);
+
+		return;
 	}
 
 	loadJSONDataEngine(data, loadingTask);
+}
+
+bool Engine::migrateFileToCurrentVersion(const AppVersion& inFileVersion, const var& inFileData, var* outFileData) const
+{
+	jassert(outFileData != nullptr);
+
+	inFileData.getDynamicObject()->setProperty("appVersion", getAppVersion());
+	URL url = URL(convertURL).withPOSTData(JSON::toString(inFileData, true));
+	WebInputStream stream(url, true);
+
+	StringArray headers;
+	headers.add("Content-Type : application/json");
+	headers.add("Accept : application/json");
+	headers.add("User-Agent : " + String(ProjectInfo::projectName) + "/1.0");
+
+	String convertedData = stream.withExtraHeaders(headers.joinIntoString("\r\n")).readEntireStreamAsString();
+	if (convertedData.isEmpty())
+	{
+		AlertWindow::showMessageBoxAsync(AlertWindow::AlertIconType::WarningIcon, "Update error", "Could not connect to the update server, please make sure you are connected to internet. You can still reload your file and not update it.", "Well, shit happens");
+		return false;
+	}
+
+	LOG(convertedData);
+	*outFileData = JSON::parse(convertedData);
+
+	if (outFileData->isVoid())
+	{
+		AlertWindow::showMessageBoxAsync(AlertWindow::AlertIconType::WarningIcon, "Update error", "There is an error with the converted file, the data is badly formatted. I mean, real bad. You can still reload your file and not update it.", "Well, shit happens");
+		return false;
+	}
+
+	return true;
+}
+
+bool Engine::isFileFormatMigrationSupported(const AppVersion& fromVersion) const 
+{
+	return convertURL.isNotEmpty();
 }
 
 void Engine::loadJSONDataEngine(var data, ProgressTask* loadingTask)
@@ -663,82 +673,31 @@ bool Engine::checkFileVersion(DynamicObject* metaData, bool checkForNewerVersion
 {
 	if (metaData == nullptr) return false;
 	if (!metaData->hasProperty("version")) return false;
-	String versionToCheck = checkForNewerVersion ? getAppVersion() : getMinimumRequiredFileVersion();
+	AppVersion versionToCheck = checkForNewerVersion ? getAppVersion() : getMinimumRequiredFileVersion();
 	//DBG(metaData->getProperty("version").toString() << " / " << versionToCheck);
 
-	String fVersion = metaData->getProperty("version").toString();
+	AppVersion fVersion = metaData->getProperty("version").toString();
 
 	if (versionToCheck == fVersion && !checkForNewerVersion) return true;
 
-	return versionIsNewerThan(fVersion, versionToCheck);
+	return versionToCheck < fVersion;
 }
 
-bool Engine::versionIsNewerThan(String versionToCheck, String referenceVersion)
+bool Engine::versionNeedsFormatMigration(const AppVersion& fromVersion) const
 {
-	bool referenceVersionIsBeta = false;
-	int referenceBetaVersion = 0;
-	if (referenceVersion.containsChar('b'))
-	{
-		referenceVersionIsBeta = true;
-		referenceBetaVersion = getBetaVersion(referenceVersion);
+	const AppVersion currentAppVersion(getAppVersion());
 
-		referenceVersion = referenceVersion.substring(0, referenceVersion.length() - 1);
-	}
-
-	bool versionToCheckIsBeta = false;
-	int versionToCheckBetaVersion = 0;
-	if (versionToCheck.containsChar('b'))
-	{
-		versionToCheckIsBeta = true;
-		versionToCheckBetaVersion = getBetaVersion(versionToCheck);
-
-		versionToCheck = versionToCheck.substring(0, versionToCheck.length() - 1);
-	}
-
-	StringArray fileVersionSplit;
-	fileVersionSplit.addTokens(versionToCheck, juce::StringRef("."), juce::StringRef("\""));
-
-	StringArray minVersionSplit;
-	minVersionSplit.addTokens(referenceVersion, juce::StringRef("."), juce::StringRef("\""));
-
-	int maxVersionNumbers = jmax<int>(fileVersionSplit.size(), minVersionSplit.size());
-	while (fileVersionSplit.size() < maxVersionNumbers) fileVersionSplit.add("0");
-	while (minVersionSplit.size() < maxVersionNumbers) minVersionSplit.add("0");
-
-	for (int i = 0; i < maxVersionNumbers; ++i)
-	{
-		int fV = fileVersionSplit[i].getIntValue();
-		int minV = minVersionSplit[i].getIntValue();
-		if (fV > minV) return true;
-		else if (fV < minV) return false;
-	}
-
-	//if equals return false
-	if (versionToCheckIsBeta == referenceVersionIsBeta) return versionToCheckBetaVersion > referenceBetaVersion;
-	return referenceVersionIsBeta;
-}
-
-int Engine::getBetaVersion(String version)
-{
-	if (!version.containsChar('b')) return 0;
-	int indexOfB = version.indexOfChar('b');
-	String vString = version.substring(indexOfB + 1);
-	return vString.getIntValue();
-}
-
-bool Engine::versionNeedsOnlineUpdate(String version)
-{
 	int curVersionRange = 0;
 	for (int i = 0; i < breakingChangesVersions.size(); ++i)
 	{
-		if (versionIsNewerThan(breakingChangesVersions[i], getAppVersion())) break;
+		if (currentAppVersion < AppVersion(breakingChangesVersions[i])) break;
 		curVersionRange++;
 	}
 
 	int targetVersionRange = 0;
 	for (int i = 0; i < breakingChangesVersions.size(); ++i)
 	{
-		if (versionIsNewerThan(breakingChangesVersions[i], version)) break;
+		if (fromVersion < AppVersion(breakingChangesVersions[i])) break;
 		targetVersionRange++;
 	}
 
