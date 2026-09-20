@@ -309,6 +309,33 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 		return;
 	}
 
+	// Verify the exact downloaded artifact before it can be installed or applied.
+	const String checksumURL = downloadURLBase + downloadingFileName + ".sha256";
+	std::unique_ptr<InputStream> checksumStream(URL(checksumURL).createInputStream(
+		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+			.withExtraHeaders("Cache-Control: no-cache")
+			.withConnectionTimeoutMs(5000)));
+
+	if (checksumStream == nullptr)
+	{
+		LOGERROR("Could not download SHA-256 checksum for " + downloadingFileName);
+		f.deleteFile();
+		queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+		return;
+	}
+
+	const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim().toLowerCase();
+	const String actualSHA256 = SHA256(f).toHexString().toLowerCase();
+	if (expectedSHA256.length() != 64 || expectedSHA256 != actualSHA256)
+	{
+		LOGERROR("SHA-256 verification failed for " + downloadingFileName);
+		f.deleteFile();
+		queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+		return;
+	}
+
+	LOG("SHA-256 verified for " + downloadingFileName);
+
 	if (extension == "zip")
 	{
 		File td = f.getParentDirectory();
