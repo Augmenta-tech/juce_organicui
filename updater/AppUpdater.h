@@ -76,6 +76,7 @@ public:
 	juce::String targetChannel;
 	juce::String latestVersion;
 	juce::Value updateAvailable;
+	bool verifySHA256 = false;
 
 	std::unique_ptr<UpdateDialogWindow> updateWindow;
 	std::unique_ptr<FloatParameter> progression;
