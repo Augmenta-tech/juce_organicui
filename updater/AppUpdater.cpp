@@ -327,7 +327,7 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 		}
 
 		const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim().toLowerCase();
-		const String actualSHA256 = SHA256(f).toHexString().toLowerCase();
+		const String actualSHA256 = juce::SHA256(f).toHexString().toLowerCase();
 		if (expectedSHA256.length() != 64 || expectedSHA256 != actualSHA256)
 		{
 			LOGERROR("SHA-256 verification failed for " + downloadingFileName);
