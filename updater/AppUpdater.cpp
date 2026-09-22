@@ -145,6 +145,7 @@ bool AppUpdater::prepareUpdateForChannel(StringRef channelRef)
 #endif
 
 	const bool isBeta = channel == "betaversion";
+	activeCustomInstall = false;
 	downloadingFileName = getDownloadFileName(version, isBeta, extension);
 	activeDownloadURL = downloadURLBase + downloadingFileName;
 	activeChecksumURL = activeDownloadURL + ".sha256";
@@ -180,14 +181,16 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 		return Result::fail("Custom update source is empty.");
 
 	extension = "AppImage";
+	activeCustomInstall = true;
 
 	if (source.startsWithIgnoreCase("https://"))
 	{
 		URL url(source);
-		downloadingFileName = url.getFileName();
-		if (!downloadingFileName.endsWithIgnoreCase(".AppImage"))
+		const String sourceName = url.getFileName();
+		if (!sourceName.endsWithIgnoreCase(".AppImage"))
 			return Result::fail("Custom update URL must point to an AppImage.");
 
+		downloadingFileName = "Augmenta-manual-download.AppImage";
 		activeDownloadURL = source;
 		activeChecksumURL = source.containsAnyOf("?#") ? String() : source + ".sha256";
 		downloadUpdate();
@@ -212,7 +215,17 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 
 	activeDownloadURL.clear();
 	activeChecksumURL.clear();
-	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_FINISHED, sourceFile));
+
+	const String hash = SHA256(sourceFile).toHexString();
+	const String stem = sourceFile.getFileNameWithoutExtension().retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+	const File staged = File::getSpecialLocation(File::tempDirectory)
+		.getChildFile("Augmenta-manual-" + (stem.isNotEmpty() ? stem : String("custom")) + "-" + hash.substring(0, 12) + ".AppImage");
+	if (staged.existsAsFile()) staged.deleteFile();
+	if (!sourceFile.copyFileTo(staged))
+		return Result::fail("Could not stage the custom AppImage.");
+	staged.setExecutePermission(true);
+
+	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_FINISHED, staged));
 	return Result::ok();
 #endif
 }
@@ -422,11 +435,15 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	}
 
 	int checksumStatusCode = 0;
-	auto checksumStream = URL(downloadURLBase + downloadingFileName + ".sha256").createInputStream(
-		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
-			.withExtraHeaders("Cache-Control: no-cache")
-			.withStatusCode(&checksumStatusCode)
-			.withConnectionTimeoutMs(5000));
+	std::unique_ptr<InputStream> checksumStream;
+	if (activeChecksumURL.isNotEmpty())
+	{
+		checksumStream = URL(activeChecksumURL).createInputStream(
+			URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+				.withExtraHeaders("Cache-Control: no-cache")
+				.withStatusCode(&checksumStatusCode)
+				.withConnectionTimeoutMs(5000));
+	}
 
 	if (checksumStream != nullptr && checksumStatusCode == 200)
 	{
@@ -444,6 +461,21 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	{
 		LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
 	}
+	if (activeCustomInstall && f.hasFileExtension("AppImage"))
+	{
+		const String hash = SHA256(f).toHexString();
+		const File managed = f.getSiblingFile("Augmenta-manual-custom-" + hash.substring(0, 12) + ".AppImage");
+		if (managed.existsAsFile()) managed.deleteFile();
+		if (!f.moveFileTo(managed))
+		{
+			LOGERROR("Could not stage custom AppImage under managed filename");
+			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+			return;
+		}
+		f = managed;
+		downloadingFileName = f.getFileName();
+	}
+
 	if (extension == "zip")
 	{
 		File td = f.getParentDirectory();
@@ -492,7 +524,8 @@ void AppUpdater::newMessage(const AppUpdateEvent& e)
 
 	case AppUpdateEvent::DOWNLOAD_ERROR:
 	case AppUpdateEvent::UPDATE_FINISHED:
-		updateWindow->getTopLevelComponent()->exitModalState(0);
+		if (updateWindow != nullptr && updateWindow->getTopLevelComponent() != nullptr)
+			updateWindow->getTopLevelComponent()->exitModalState(0);
 		break;
 
 	default:
