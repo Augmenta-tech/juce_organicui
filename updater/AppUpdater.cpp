@@ -190,7 +190,13 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 		if (!sourceName.endsWithIgnoreCase(".AppImage"))
 			return Result::fail("Custom update URL must point to an AppImage.");
 
-		downloadingFileName = "Augmenta-manual-download.AppImage";
+		String sourceStem = File(sourceName).getFileNameWithoutExtension();
+		if (sourceStem.startsWith("Augmenta-linux-x64-"))
+			sourceStem = sourceStem.substring(String("Augmenta-linux-x64-").length());
+		sourceStem = sourceStem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+		if (sourceStem.isEmpty()) sourceStem = "custom";
+
+		downloadingFileName = "Augmenta-manual-" + sourceStem + ".AppImage";
 		activeDownloadURL = source;
 		activeChecksumURL = source.containsAnyOf("?#") ? String() : source + ".sha256";
 		downloadUpdate();
@@ -217,9 +223,13 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 	activeChecksumURL.clear();
 
 	const String hash = SHA256(sourceFile).toHexString();
-	const String stem = sourceFile.getFileNameWithoutExtension().retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+	String stem = sourceFile.getFileNameWithoutExtension();
+	if (stem.startsWith("Augmenta-linux-x64-"))
+		stem = stem.substring(String("Augmenta-linux-x64-").length());
+	stem = stem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+	if (stem.isEmpty()) stem = "custom";
 	const File staged = File::getSpecialLocation(File::tempDirectory)
-		.getChildFile("Augmenta-manual-" + (stem.isNotEmpty() ? stem : String("custom")) + "-" + hash.substring(0, 12) + ".AppImage");
+		.getChildFile("Augmenta-manual-" + stem + "-" + hash.substring(0, 12) + ".AppImage");
 	if (staged.existsAsFile()) staged.deleteFile();
 	if (!sourceFile.copyFileTo(staged))
 		return Result::fail("Could not stage the custom AppImage.");
@@ -464,7 +474,10 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	if (activeCustomInstall && f.hasFileExtension("AppImage"))
 	{
 		const String hash = SHA256(f).toHexString();
-		const File managed = f.getSiblingFile("Augmenta-manual-custom-" + hash.substring(0, 12) + ".AppImage");
+		String stem = f.getFileNameWithoutExtension();
+		if (stem.startsWith("Augmenta-manual-"))
+			stem = stem.substring(String("Augmenta-manual-").length());
+		const File managed = f.getSiblingFile("Augmenta-manual-" + stem + "-" + hash.substring(0, 12) + ".AppImage");
 		if (managed.existsAsFile()) managed.deleteFile();
 		if (!f.moveFileTo(managed))
 		{
