@@ -309,6 +309,29 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 		return;
 	}
 
+	int checksumStatusCode = 0;
+	auto checksumStream = URL(downloadURLBase + downloadingFileName + ".sha256").createInputStream(
+		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+			.withExtraHeaders("Cache-Control: no-cache")
+			.withStatusCode(&checksumStatusCode)
+			.withConnectionTimeoutMs(5000));
+
+	if (checksumStream != nullptr && checksumStatusCode == 200)
+	{
+		const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim();
+		if (!expectedSHA256.equalsIgnoreCase(juce::SHA256(f).toHexString()))
+		{
+			LOGERROR("SHA-256 verification failed for " + downloadingFileName);
+			f.deleteFile();
+			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+			return;
+		}
+		LOG("SHA-256 verified for " + downloadingFileName);
+	}
+	else
+	{
+		LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
+	}
 	if (extension == "zip")
 	{
 		File td = f.getParentDirectory();
