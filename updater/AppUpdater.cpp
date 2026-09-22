@@ -222,7 +222,7 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 	activeDownloadURL.clear();
 	activeChecksumURL.clear();
 
-	const String hash = SHA256(sourceFile).toHexString();
+	const String hash = juce::SHA256(sourceFile).toHexString();
 	String stem = sourceFile.getFileNameWithoutExtension();
 	if (stem.startsWith("Augmenta-linux-x64-"))
 		stem = stem.substring(String("Augmenta-linux-x64-").length());
@@ -473,7 +473,7 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	}
 	if (activeCustomInstall && f.hasFileExtension("AppImage"))
 	{
-		const String hash = SHA256(f).toHexString();
+		const String hash = juce::SHA256(f).toHexString();
 		String stem = f.getFileNameWithoutExtension();
 		if (stem.startsWith("Augmenta-manual-"))
 			stem = stem.substring(String("Augmenta-manual-").length());
