@@ -313,6 +313,12 @@ void GlobalSettings::loadJSONDataInternal(var data)
 {
 	openSpecificFileOnStartup->setEnabled(!openLastDocumentOnStartup->boolValue());
 	fileToOpenOnStartup->setEnabled(openSpecificFileOnStartup->boolValue());
+
+	// Older builds could persist arbitrary build suffixes (for example "a") as
+	// update channels. They now map to the explicit Custom policy.
+	const String channel = updateChannel->getValueData().toString();
+	if (channel != "stableversion" && channel != "betaversion" && channel != "custom")
+		updateChannel->setValueWithData("custom");
 }
 
 void GlobalSettings::loadKeyMappingsFromData()
