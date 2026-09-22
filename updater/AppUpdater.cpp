@@ -190,7 +190,7 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 		if (!sourceName.endsWithIgnoreCase(".AppImage"))
 			return Result::fail("Custom update URL must point to an AppImage.");
 
-		String sourceStem = File(sourceName).getFileNameWithoutExtension();
+		String sourceStem = sourceName.dropLastCharacters(String(".AppImage").length());
 		if (sourceStem.startsWith("Augmenta-linux-x64-"))
 			sourceStem = sourceStem.substring(String("Augmenta-linux-x64-").length());
 		sourceStem = sourceStem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
