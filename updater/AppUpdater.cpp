@@ -312,6 +312,7 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	int checksumStatusCode = 0;
 	auto checksumStream = URL(downloadURLBase + downloadingFileName + ".sha256").createInputStream(
 		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+			.withExtraHeaders("Cache-Control: no-cache")
 			.withStatusCode(&checksumStatusCode)
 			.withConnectionTimeoutMs(5000));
 
