@@ -19,9 +19,10 @@ public:
 	bool operator<(const AppVersion& other) const;
 	bool operator<=(const AppVersion& other) const;
 
+	bool isAlpha() const { return channelName == "a"; }
 	bool isBeta() const { return channelName == "b"; }
 	bool isRelease() const { return channelName.isEmpty(); }
-	bool isCustom() const { return !isBeta() && !isRelease(); }
+	bool isCustom() const { return !isAlpha() && !isBeta() && !isRelease(); }
 
 	int getMajor() const { return major; }
 	int getMinor() const { return minor; }
