@@ -266,7 +266,7 @@ void OrganicApplication::newMessage(const AppUpdateEvent& e)
 			// Copy the downloaded AppImage next to the current one
 			File currentAppImageFile = File(appImageEnvVar);
 			File targetAppImageFile = currentAppImageFile.getParentDirectory().getChildFile(e.file.getFileName());
-			if (!e.file.copyFileTo(targetAppImageFile))
+			if (e.file != targetAppImageFile && !e.file.copyFileTo(targetAppImageFile))
 			{
 				LOGERROR("Could not copy the downloaded file to current directory.");
 				return;
@@ -302,6 +302,10 @@ void OrganicApplication::newMessage(const AppUpdateEvent& e)
 					return;
 				}
 			}
+
+			if (e.file.getParentDirectory() == File::getSpecialLocation(File::tempDirectory)
+				&& e.file != targetAppImageFile)
+				e.file.deleteFile();
 
 			JUCEApplication::getInstance()->systemRequestedQuit();
 #else
