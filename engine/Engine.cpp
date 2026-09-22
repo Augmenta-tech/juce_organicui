@@ -43,11 +43,17 @@ Engine::Engine(const String& fileName, const String& fileExtension) :
 	{
 		updateChannel = "stableversion";
 	}
-	if (updateChannel == "b")
+	else if (updateChannel == "b")
 	{
 		isBetaVersion = true;
 		updateChannel = "betaversion";
 		betaVersion = version.getChannelVersion();
+	}
+	else
+	{
+		// Alpha and any other non-official build suffix start in Custom unless a
+		// persisted user preference later overrides this in GlobalSettings.
+		updateChannel = "custom";
 	}
 
 	selectionManager.reset(new InspectableSelectionManager(true)); //selectionManager constructor
