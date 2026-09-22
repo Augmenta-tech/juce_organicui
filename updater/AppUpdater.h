@@ -81,6 +81,8 @@ public:
 	std::unique_ptr<FloatParameter> progression;
 
 	std::unique_ptr<juce::URL::DownloadTask> downloadTask;
+	juce::String activeDownloadURL;
+	juce::String activeChecksumURL;
 
 	void setURLs(juce::StringRef _updateURL, juce::StringRef _downloadURLBase, juce::StringRef filePrefix);
 
