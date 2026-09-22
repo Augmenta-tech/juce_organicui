@@ -15,6 +15,23 @@ juce::ApplicationProperties& getAppProperties();// { return *getApp().appPropert
 
 #define FORCE_UPDATE 0 //to test
 
+namespace
+{
+bool isValidLinuxAppImage(const juce::File& file)
+{
+	if (!file.existsAsFile() || file.getSize() < 1000000)
+		return false;
+
+	juce::FileInputStream stream(file);
+	if (!stream.openedOk())
+		return false;
+
+	unsigned char magic[4] = {};
+	return stream.read(magic, 4) == 4
+		&& magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+}
+}
+
 AppUpdater::AppUpdater() :
 	Thread("appUpdater"),
 	queuedNotifier(30)
@@ -216,8 +233,8 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 		return Result::fail("Custom AppImage file does not exist.");
 	if (!sourceFile.hasFileExtension("AppImage"))
 		return Result::fail("Custom update file must be an AppImage.");
-	if (sourceFile.getSize() < 1000000)
-		return Result::fail("Custom AppImage is unexpectedly small.");
+	if (!isValidLinuxAppImage(sourceFile))
+		return Result::fail("Custom AppImage is not a valid ELF AppImage.");
 
 	activeDownloadURL.clear();
 	activeChecksumURL.clear();
@@ -441,6 +458,14 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	if (f.getSize() < 1000000) //if file is less than 1Mo, got a problem
 	{
 		LOGERROR("Wrong file size, try downloading it directly from the website");
+		return;
+	}
+
+	if (f.hasFileExtension("AppImage") && !isValidLinuxAppImage(f))
+	{
+		LOGERROR("Downloaded AppImage is not a valid ELF AppImage");
+		f.deleteFile();
+		queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
 		return;
 	}
 
