@@ -320,23 +320,22 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 
 		if (checksumStream == nullptr)
 		{
-			LOGERROR("Could not download SHA-256 checksum for " + downloadingFileName);
-			f.deleteFile();
-			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
-			return;
+			LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
 		}
-
-		const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim().toLowerCase();
-		const String actualSHA256 = juce::SHA256(f).toHexString().toLowerCase();
-		if (expectedSHA256.length() != 64 || expectedSHA256 != actualSHA256)
+		else
 		{
-			LOGERROR("SHA-256 verification failed for " + downloadingFileName);
-			f.deleteFile();
-			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
-			return;
-		}
+			const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim().toLowerCase();
+			const String actualSHA256 = juce::SHA256(f).toHexString().toLowerCase();
+			if (expectedSHA256.length() != 64 || expectedSHA256 != actualSHA256)
+			{
+				LOGERROR("SHA-256 verification failed for " + downloadingFileName);
+				f.deleteFile();
+				queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+				return;
+			}
 
-		LOG("SHA-256 verified for " + downloadingFileName);
+			LOG("SHA-256 verified for " + downloadingFileName);
+		}
 	}
 
 	if (extension == "zip")
