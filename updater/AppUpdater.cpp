@@ -309,37 +309,28 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 		return;
 	}
 
-	if (verifySHA256)
+	int checksumStatusCode = 0;
+	auto checksumStream = URL(downloadURLBase + downloadingFileName + ".sha256").createInputStream(
+		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+			.withStatusCode(&checksumStatusCode)
+			.withConnectionTimeoutMs(5000));
+
+	if (checksumStream != nullptr && checksumStatusCode == 200)
 	{
-		// Verify the exact downloaded artifact before it can be installed or applied.
-		const String checksumURL = downloadURLBase + downloadingFileName + ".sha256";
-		int checksumStatusCode = 0;
-		std::unique_ptr<InputStream> checksumStream(URL(checksumURL).createInputStream(
-			URL::InputStreamOptions(URL::ParameterHandling::inAddress)
-				.withExtraHeaders("Cache-Control: no-cache")
-				.withStatusCode(&checksumStatusCode)
-				.withConnectionTimeoutMs(5000)));
-
-		if (checksumStream == nullptr || checksumStatusCode != 200)
+		const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim();
+		if (!expectedSHA256.equalsIgnoreCase(juce::SHA256(f).toHexString()))
 		{
-			LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
+			LOGERROR("SHA-256 verification failed for " + downloadingFileName);
+			f.deleteFile();
+			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+			return;
 		}
-		else
-		{
-			const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim().toLowerCase();
-			const String actualSHA256 = juce::SHA256(f).toHexString().toLowerCase();
-			if (expectedSHA256.length() != 64 || expectedSHA256 != actualSHA256)
-			{
-				LOGERROR("SHA-256 verification failed for " + downloadingFileName);
-				f.deleteFile();
-				queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
-				return;
-			}
-
-			LOG("SHA-256 verified for " + downloadingFileName);
-		}
+		LOG("SHA-256 verified for " + downloadingFileName);
 	}
-
+	else
+	{
+		LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
+	}
 	if (extension == "zip")
 	{
 		File td = f.getParentDirectory();
