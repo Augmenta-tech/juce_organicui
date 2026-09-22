@@ -313,12 +313,14 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	{
 		// Verify the exact downloaded artifact before it can be installed or applied.
 		const String checksumURL = downloadURLBase + downloadingFileName + ".sha256";
+		int checksumStatusCode = 0;
 		std::unique_ptr<InputStream> checksumStream(URL(checksumURL).createInputStream(
 			URL::InputStreamOptions(URL::ParameterHandling::inAddress)
 				.withExtraHeaders("Cache-Control: no-cache")
+				.withStatusCode(&checksumStatusCode)
 				.withConnectionTimeoutMs(5000)));
 
-		if (checksumStream == nullptr)
+		if (checksumStream == nullptr || checksumStatusCode != 200)
 		{
 			LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
 		}
