@@ -87,7 +87,6 @@ void AppUpdater::showDialog(StringRef version, bool beta, StringRef title, Strin
 
 void AppUpdater::downloadUpdate()
 {
-
 	DBG("Download file name " << downloadingFileName);
 
 	targetDir.createDirectory();
@@ -101,51 +100,142 @@ void AppUpdater::downloadUpdate()
 	else
 	{
 		targetFile = File::getSpecialLocation(File::tempDirectory).getChildFile(downloadingFileName);
+		if (targetFile.existsAsFile()) targetFile.deleteFile();
 	}
 
 	downloadingFileName = targetFile.getFileName();
-
-	URL downloadURL = URL(downloadURLBase + downloadingFileName);
+	const String urlString = activeDownloadURL.isNotEmpty()
+		? activeDownloadURL
+		: downloadURLBase + downloadingFileName;
+	URL downloadURL(urlString);
 
 	LOG("Downloading " + downloadURL.toString(false) + "...");
 	downloadTask = downloadURL.downloadToFile(targetFile, URL::DownloadTaskOptions().withListener(this));
-
 
 	if (downloadTask == nullptr)
 	{
 		LOGERROR("Error while downloading " + downloadingFileName + ",\ntry downloading it directly from the website.");
 		queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+		return;
 	}
 	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_STARTED));
+}
+
+bool AppUpdater::prepareUpdateForChannel(StringRef channelRef)
+{
+	const String channel(channelRef);
+	if (channel != "stableversion" && channel != "betaversion")
+		return false;
+
+	if (!updateData.isObject() && !updateTargetChannelLatestVersionAndUpdateAvailable())
+		return false;
+
+	const var data = updateData.getProperty(channel, var());
+	const String version = data.getProperty("version", "").toString();
+	if (version.isEmpty())
+		return false;
+
+	extension = "zip";
+#if JUCE_WINDOWS
+	extension = updateData.getProperty("winExtension", "zip");
+#elif JUCE_MAC
+	extension = updateData.getProperty("osxExtension", "zip");
+#elif JUCE_LINUX
+	extension = updateData.getProperty("linuxExtension", "zip");
+#endif
+
+	const bool isBeta = channel == "betaversion";
+	downloadingFileName = getDownloadFileName(version, isBeta, extension);
+	activeDownloadURL = downloadURLBase + downloadingFileName;
+	activeChecksumURL = activeDownloadURL + ".sha256";
+	return true;
+}
+
+bool AppUpdater::installPreparedUpdateForChannel(StringRef channel)
+{
+	if (!prepareUpdateForChannel(channel))
+		return false;
+
+	downloadUpdate();
+	return downloadTask != nullptr;
+}
+
+bool AppUpdater::customInstallSupported() const
+{
+#if JUCE_LINUX
+	return true;
+#else
+	return false;
+#endif
+}
+
+Result AppUpdater::installCustomUpdate(StringRef sourceRef)
+{
+#if !JUCE_LINUX
+	ignoreUnused(sourceRef);
+	return Result::fail("Custom file/URL installation is available on Linux only.");
+#else
+	const String source = String(sourceRef).trim();
+	if (source.isEmpty())
+		return Result::fail("Custom update source is empty.");
+
+	extension = "AppImage";
+
+	if (source.startsWithIgnoreCase("https://"))
+	{
+		URL url(source);
+		downloadingFileName = url.getFileName();
+		if (!downloadingFileName.endsWithIgnoreCase(".AppImage"))
+			return Result::fail("Custom update URL must point to an AppImage.");
+
+		activeDownloadURL = source;
+		activeChecksumURL = source.containsAnyOf("?#") ? String() : source + ".sha256";
+		downloadUpdate();
+		return downloadTask != nullptr
+			? Result::ok()
+			: Result::fail("Could not start the custom AppImage download.");
+	}
+
+	if (source.contains("://"))
+		return Result::fail("Only HTTPS URLs are accepted for remote custom updates.");
+
+	File sourceFile = File::isAbsolutePath(source)
+		? File(source)
+		: File::getCurrentWorkingDirectory().getChildFile(source);
+
+	if (!sourceFile.existsAsFile())
+		return Result::fail("Custom AppImage file does not exist.");
+	if (!sourceFile.hasFileExtension("AppImage"))
+		return Result::fail("Custom update file must be an AppImage.");
+	if (sourceFile.getSize() < 1000000)
+		return Result::fail("Custom AppImage is unexpectedly small.");
+
+	activeDownloadURL.clear();
+	activeChecksumURL.clear();
+	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_FINISHED, sourceFile));
+	return Result::ok();
+#endif
 }
 
 bool AppUpdater::updateTargetChannelLatestVersionAndUpdateAvailable()
 {
 	if (Engine::mainEngine == nullptr)
-	{
 		return false;
-	}
 
-	// First cleanup update_temp directory
 	targetDir = File::getSpecialLocation(File::currentApplicationFile).getParentDirectory().getChildFile("update_temp");
 	if (targetDir.exists())
-	{
 		targetDir.deleteRecursively();
-	}
 
 	std::function<bool(int, int)> callbackFunc = std::bind(&AppUpdater::openStreamProgressCallback, this, std::placeholders::_1, std::placeholders::_2);
 
 	StringPairArray responseHeaders;
 	int statusCode = 0;
-
 	URL::InputStreamOptions options = URL::InputStreamOptions(URL::ParameterHandling::inAddress)
 		.withExtraHeaders("Cache-Control: no-cache")
 		.withProgressCallback(callbackFunc)
 		.withResponseHeaders(&responseHeaders)
 		.withStatusCode(&statusCode)
-		.withConnectionTimeoutMs(2000)
-		;
-
+		.withConnectionTimeoutMs(2000);
 
 	std::unique_ptr<InputStream> stream(URL(updateURL).createInputStream(options));
 
@@ -157,17 +247,13 @@ bool AppUpdater::updateTargetChannelLatestVersionAndUpdateAvailable()
 	}
 #endif
 
-	DBG("AppUpdater:: Status code " << statusCode);
-
 	if (stream == nullptr)
 	{
 		LOGERROR("Error while trying to access to the update file");
 		return false;
 	}
 
-	String content = stream->readEntireStreamAsString();
-	updateData = JSON::parse(content);
-
+	updateData = JSON::parse(stream->readEntireStreamAsString());
 	if (!updateData.isObject())
 	{
 		LOGERROR("Error while checking updates, update file is not valid");
@@ -176,100 +262,126 @@ bool AppUpdater::updateTargetChannelLatestVersionAndUpdateAvailable()
 
 #if !JUCE_DEBUG
 	if (updateData.getProperty("testing", false))
-	{
 		return false;
-	}
 #endif
 
-	targetChannel = GlobalSettings::getInstance()->updateChannel->getValueData();
-	String currentChannel = Engine::mainEngine->updateChannel;
+	targetChannel = GlobalSettings::getInstance()->updateChannel->getValueData().toString();
+	if (targetChannel != "stableversion" && targetChannel != "betaversion" && targetChannel != "custom")
+		targetChannel = "custom";
 
-	// Extract the desired channel's info from the update json file 
-	const var updateDataForTargetChannel = updateData.getProperty(targetChannel, var());
+	stableVersion = updateData.getProperty("stableversion", var()).getProperty("version", "").toString();
+	betaVersion = updateData.getProperty("betaversion", var()).getProperty("version", "").toString();
 
-	const AppVersion targetVersion = AppVersion(updateDataForTargetChannel.getProperty("version", ""));
 	const AppVersion currentVersion(getAppVersion());
-	const bool isChangingChannel = currentChannel != targetChannel;
-	updateAvailable = currentVersion < targetVersion || (isChangingChannel && currentVersion <= targetVersion);
-	
-	latestVersion = targetVersion.toString();
-	
+	const bool stableNewer = stableVersion.isNotEmpty() && currentVersion < AppVersion(stableVersion);
+	const bool betaNewer = betaVersion.isNotEmpty() && currentVersion < AppVersion(betaVersion);
+
+	stableUpdateAvailable = stableNewer;
+	betaUpdateAvailable = betaNewer;
+
+	if (targetChannel == "stableversion")
+	{
+		latestVersion = stableVersion;
+		updateAvailable = stableNewer;
+	}
+	else if (targetChannel == "betaversion")
+	{
+		latestVersion = betaVersion;
+		updateAvailable = betaNewer;
+	}
+	else
+	{
+		latestVersion = getAppVersion();
+		updateAvailable = false;
+	}
+
+	notificationChannel.clear();
+	notificationVersion.clear();
+
+	auto considerNotification = [this, &currentVersion](const String& channel, const String& version)
+		{
+			if (version.isEmpty() || !(currentVersion < AppVersion(version)))
+				return;
+			if (notificationVersion.isEmpty() || AppVersion(notificationVersion) < AppVersion(version))
+			{
+				notificationChannel = channel;
+				notificationVersion = version;
+			}
+		};
+
+	if (targetChannel == "stableversion")
+	{
+		considerNotification("stableversion", stableVersion);
+	}
+	else
+	{
+		considerNotification("stableversion", stableVersion);
+		considerNotification("betaversion", betaVersion);
+	}
+
+	notificationAvailable = notificationVersion.isNotEmpty();
 	return true;
 }
 
 void AppUpdater::run()
 {
 	if (!updateTargetChannelLatestVersionAndUpdateAvailable())
-	{
 		return;
-	}
-	var data = updateData.getProperty(targetChannel, var());
 
 #if !FORCE_UPDATE
-	if (updateAvailable.getValue())
+	if (!notificationAvailable.getValue())
 	{
-		updateAvailable = true;
-
-		String version = data.getProperty("version", "");
+		LOG("App is up to date for notification policy.");
+		return;
+	}
 #endif
-		String savedSkipVersion = getAppProperties().getUserSettings()->getValue("skipVersion", "");
-		if (version == savedSkipVersion)
-		{
-			NLOG("Updater", "New version available but set to skip : " << version);
-			return;
-		}
 
-		bool isBeta = targetChannel == "betaversion";
-		String channelName = "";
-		if (isBeta)
-		{
-			channelName = "BETA ";
-		}
-		String msg = "A new " + channelName + "version of " + ProjectInfo::projectName + " is available : " + version + ", do you want to update the app ?\nYou can also deactivate updates in the preferences.";
+	const String version = notificationVersion;
+	const String channel = notificationChannel;
+	const var data = updateData.getProperty(channel, var());
 
-		Array<var>* changelog = data.getProperty("changelog", var()).getArray();
-		String changelogString = "Changes since your version :\n\n";
-		changelogString += "Version " + version + ":\n";
-		for (auto& c : *changelog) changelogString += c.toString() + "\n";
-		changelogString += "\n\n";
+	const String savedSkipVersion = getAppProperties().getUserSettings()->getValue("skipVersion", "");
+	if (version == savedSkipVersion)
+	{
+		NLOG("Updater", "New version available but set to skip : " << version);
+		return;
+	}
 
-		Array<var>* oldChangelogs = updateData.getProperty("archives", var()).getArray();
-		for (int i = oldChangelogs->size() - 1; i >= 0; i--)
+	const bool isBeta = channel == "betaversion";
+	const String channelName = isBeta ? "BETA " : "";
+	const String msg = "A new " + channelName + "version of " + ProjectInfo::projectName
+		+ " is available : " + version + ", do you want to update the app ?\n"
+		+ "You can also deactivate updates in the preferences.";
+
+	String changelogString = "Changes since your version :\n\n";
+	changelogString += "Version " + version + ":\n";
+	if (auto* changelog = data.getProperty("changelog", var()).getArray())
+		for (auto& entry : *changelog) changelogString += entry.toString() + "\n";
+	changelogString += "\n\n";
+
+	if (auto* oldChangelogs = updateData.getProperty("archives", var()).getArray())
+	{
+		for (int i = oldChangelogs->size() - 1; i >= 0; --i)
 		{
-			var ch = oldChangelogs->getUnchecked(i);
+			const var ch = oldChangelogs->getUnchecked(i);
 			AppVersion chVersion(ch.getProperty("version", "1.0.0"));
 			if (chVersion < AppVersion(getAppVersion())) break;
 
 			changelogString += "Version " + chVersion.toString() + ":\n";
-			Array<var>* versionChangelog = ch.getProperty("changelog", var()).getArray();
-			for (auto& c : *versionChangelog) changelogString += c.toString() + "\n";
+			if (auto* versionChangelog = ch.getProperty("changelog", var()).getArray())
+				for (auto& entry : *versionChangelog) changelogString += entry.toString() + "\n";
 			changelogString += "\n\n";
 		}
-
-
-		String title = "New " + channelName + "version available";
-
-		extension = "zip";
-
-#if JUCE_WINDOWS
-		extension = updateData.getProperty("winExtension", "zip");
-#elif JUCE_MAC
-		extension = updateData.getProperty("osxExtension", "zip");
-#elif JUCE_LINUX
-		extension = updateData.getProperty("linuxExtension", "zip");
-#endif
-
-		downloadingFileName = getDownloadFileName(version, isBeta, extension);
-
-		queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_AVAILABLE, version, isBeta, title, msg, changelogString));
-
-#if !FORCE_UPDATE
 	}
-	else
+
+	if (!prepareUpdateForChannel(channel))
 	{
-		LOG("App is up to date :) (Latest version online : " << data.getProperty("version", "").toString() << ")");
+		LOGERROR("Could not prepare update " + version);
+		return;
 	}
-#endif
+
+	const String title = "New " + channelName + "version available";
+	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_AVAILABLE, version, isBeta, title, msg, changelogString));
 }
 
 void AppUpdater::finished(URL::DownloadTask* task, bool success)
