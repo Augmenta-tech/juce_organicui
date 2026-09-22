@@ -45,116 +45,26 @@
 
 	bool AppVersion::operator<(const AppVersion& other) const
 	{
-		if (isCustom())
-		{
-			if (channelName != other.channelName)
-			{
-				return false;
-			}
+		if (major != other.major) return major < other.major;
+		if (minor != other.minor) return minor < other.minor;
+		if (patch != other.patch) return patch < other.patch;
 
-			if (major < other.major)
+		auto channelRank = [](const String& channel)
 			{
-				return true;
-			}
-			else if (major > other.major)
-			{
-				return false;
-			}
+				if (channel.isEmpty()) return 3; // release
+				if (channel == "b") return 2;
+				if (channel == "a") return 1;
+				return 0; // other prerelease/custom suffixes
+			};
 
-			if (minor < other.minor)
-			{
-				return true;
-			}
-			else if (minor > other.minor)
-			{
-				return false;
-			}
+		const int rank = channelRank(channelName);
+		const int otherRank = channelRank(other.channelName);
+		if (rank != otherRank) return rank < otherRank;
 
-			if (patch < other.patch)
-			{
-				return true;
-			}
-			else if (patch > other.patch)
-			{
-				return false;
-			}
+		if (channelName != other.channelName)
+			return channelName < other.channelName;
 
-			if (channelVersion < other.channelVersion)
-			{
-				return true;
-			}
-			else if (channelVersion > other.channelVersion)
-			{
-				return false;
-			}
-
-			return false;
-		}
-		else
-		{
-			if (major < other.major)
-			{
-				return true;
-			}
-			else if (major > other.major)
-			{
-				return false;
-			}
-
-			if (minor < other.minor)
-			{
-				return true;
-			}
-			else if (minor > other.minor)
-			{
-				return false;
-			}
-
-			if (patch < other.patch)
-			{
-				return true;
-			}
-			else if (patch > other.patch)
-			{
-				return false;
-			}
-
-			// All other fields equals:
-			// if both are beta, compare channel ver
-			// if only one is beta, the non beta one is >
-			// if none are beta, they are equal
-			if (isBeta())
-			{
-				if (!other.isBeta())
-				{
-					return true;
-				}
-				else
-				{
-					if (channelVersion < other.channelVersion)
-					{
-						return true;
-					}
-					else if (channelVersion > other.channelVersion)
-					{
-						return false;
-					}
-
-					return false;
-				}
-			}
-			else
-			{
-				if (other.isBeta())
-				{
-					return false;
-				}
-				else
-				{
-					return false;
-				}
-			}
-		}
+		return channelVersion < other.channelVersion;
 	}
 
 	bool AppVersion::operator<=(const AppVersion& other) const

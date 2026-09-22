@@ -84,13 +84,14 @@ GlobalSettings::GlobalSettings() :
 	allowMultipleInstances = startupCC.addBoolParameter("Allow Multiple Instances", "If checked, it will be possible to launch multiple instances of this application at the same time (not working on Mac, you would have to actually duplicate the app)", false);
 	checkUpdatesOnStartup = startupCC.addBoolParameter("Check updates on startup", "If enabled, app will check if any updates are available", true);
 	updateChannel = startupCC.addEnumParameter("Update Channel", "Channel to pull software updates from");
-	updateChannel->addOption("Stable", "stableversion")->addOption("Beta", "betaversion");
-	const String& currentUpdateChannel = Engine::mainEngine->updateChannel;
-	if (currentUpdateChannel != "stableversion" && currentUpdateChannel != "betaversion")
-	{
-		updateChannel->addOption(currentUpdateChannel, currentUpdateChannel);
-	}
-	updateChannel->setValueWithData(currentUpdateChannel);
+	updateChannel->addOption("Stable", "stableversion")
+		->addOption("Beta", "betaversion")
+		->addOption("Custom", "custom");
+
+	String defaultUpdateChannel = Engine::mainEngine->updateChannel;
+	if (defaultUpdateChannel != "stableversion" && defaultUpdateChannel != "betaversion")
+		defaultUpdateChannel = "custom";
+	updateChannel->setValueWithData(defaultUpdateChannel);
 
 	updateHelpOnStartup = startupCC.addBoolParameter("Update help on startup", "If enabled, app will try and download the last help file locally", true);
 
@@ -312,6 +313,12 @@ void GlobalSettings::loadJSONDataInternal(var data)
 {
 	openSpecificFileOnStartup->setEnabled(!openLastDocumentOnStartup->boolValue());
 	fileToOpenOnStartup->setEnabled(openSpecificFileOnStartup->boolValue());
+
+	// Older builds could persist arbitrary build suffixes (for example "a") as
+	// update channels. They now map to the explicit Custom policy.
+	const String channel = updateChannel->getValueData().toString();
+	if (channel != "stableversion" && channel != "betaversion" && channel != "custom")
+		updateChannel->setValueWithData("custom");
 }
 
 void GlobalSettings::loadKeyMappingsFromData()
