@@ -191,69 +191,33 @@ Result AppUpdater::installCustomUpdate(StringRef sourceRef)
 {
 #if !JUCE_LINUX
 	ignoreUnused(sourceRef);
-	return Result::fail("Custom file/URL installation is available on Linux only.");
+	return Result::fail("Custom URL installation is available on Linux only.");
 #else
 	const String source = String(sourceRef).trim();
-	if (source.isEmpty())
-		return Result::fail("Custom update source is empty.");
+	if (!source.startsWithIgnoreCase("https://"))
+		return Result::fail("Custom update source must be an HTTPS AppImage URL.");
+
+	URL url(source);
+	const String sourceName = url.getFileName();
+	if (!sourceName.endsWithIgnoreCase(".AppImage"))
+		return Result::fail("Custom update URL must point to an AppImage.");
+
+	String sourceStem = sourceName.dropLastCharacters(String(".AppImage").length());
+	if (sourceStem.startsWith("Augmenta-linux-x64-"))
+		sourceStem = sourceStem.substring(String("Augmenta-linux-x64-").length());
+	sourceStem = sourceStem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+	if (sourceStem.isEmpty()) sourceStem = "custom";
 
 	extension = "AppImage";
 	activeCustomInstall = true;
+	downloadingFileName = "Augmenta-manual-" + sourceStem + ".AppImage";
+	activeDownloadURL = source;
+	activeChecksumURL = source.containsAnyOf("?#") ? String() : source + ".sha256";
+	downloadUpdate();
 
-	if (source.startsWithIgnoreCase("https://"))
-	{
-		URL url(source);
-		const String sourceName = url.getFileName();
-		if (!sourceName.endsWithIgnoreCase(".AppImage"))
-			return Result::fail("Custom update URL must point to an AppImage.");
-
-		String sourceStem = sourceName.dropLastCharacters(String(".AppImage").length());
-		if (sourceStem.startsWith("Augmenta-linux-x64-"))
-			sourceStem = sourceStem.substring(String("Augmenta-linux-x64-").length());
-		sourceStem = sourceStem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
-		if (sourceStem.isEmpty()) sourceStem = "custom";
-
-		downloadingFileName = "Augmenta-manual-" + sourceStem + ".AppImage";
-		activeDownloadURL = source;
-		activeChecksumURL = source.containsAnyOf("?#") ? String() : source + ".sha256";
-		downloadUpdate();
-		return downloadTask != nullptr
-			? Result::ok()
-			: Result::fail("Could not start the custom AppImage download.");
-	}
-
-	if (source.contains("://"))
-		return Result::fail("Only HTTPS URLs are accepted for remote custom updates.");
-
-	File sourceFile = File::isAbsolutePath(source)
-		? File(source)
-		: File::getCurrentWorkingDirectory().getChildFile(source);
-
-	if (!sourceFile.existsAsFile())
-		return Result::fail("Custom AppImage file does not exist.");
-	if (!sourceFile.hasFileExtension("AppImage"))
-		return Result::fail("Custom update file must be an AppImage.");
-	if (!isValidLinuxAppImage(sourceFile))
-		return Result::fail("Custom AppImage is not a valid ELF AppImage.");
-
-	activeDownloadURL.clear();
-	activeChecksumURL.clear();
-
-	const String hash = juce::SHA256(sourceFile).toHexString();
-	String stem = sourceFile.getFileNameWithoutExtension();
-	if (stem.startsWith("Augmenta-linux-x64-"))
-		stem = stem.substring(String("Augmenta-linux-x64-").length());
-	stem = stem.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
-	if (stem.isEmpty()) stem = "custom";
-	const File staged = File::getSpecialLocation(File::tempDirectory)
-		.getChildFile("Augmenta-manual-" + stem + "-" + hash.substring(0, 12) + ".AppImage");
-	if (staged.existsAsFile()) staged.deleteFile();
-	if (!sourceFile.copyFileTo(staged))
-		return Result::fail("Could not stage the custom AppImage.");
-	staged.setExecutePermission(true);
-
-	queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::UPDATE_FINISHED, staged));
-	return Result::ok();
+	return downloadTask != nullptr
+		? Result::ok()
+		: Result::fail("Could not start the custom AppImage download.");
 #endif
 }
 
