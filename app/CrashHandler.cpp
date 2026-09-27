@@ -263,7 +263,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 #if JUCE_DEBUG
 	LOG("Received : " << response);
 #endif
-	if (!response.contains("ok"))
+	if (response.trim() != "ok")
 	{
 		LOGWARNING("Error from diagnostic report server: " + response);
 		return false;
