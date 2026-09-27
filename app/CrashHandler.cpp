@@ -326,6 +326,39 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	return true;
 }
 
+bool CrashDumpUploader::uploadReportAsync(const String& reportType,
+	const String& message,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	const String& reportId,
+	var sourceMetadata,
+	std::function<void(bool)> completion)
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::Report;
+	asyncReportType = reportType;
+	asyncMessage = message;
+	asyncDiagnosticFiles = diagnosticFiles;
+	asyncSessionFile = sessionFile;
+	asyncReportId = reportId;
+	asyncSourceMetadata = sourceMetadata;
+	asyncCompletion = std::move(completion);
+	startThread();
+	return true;
+}
+
+bool CrashDumpUploader::uploadPendingDiagnosticsAsync()
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::PendingDiagnostics;
+	startThread();
+	return true;
+}
+
 void CrashDumpUploader::uploadPendingDiagnostics()
 {
 	if (!diagnosticFilesProvider)
@@ -385,6 +418,26 @@ void CrashDumpUploader::exitApp()
 
 void CrashDumpUploader::run()
 {
+	if (asyncWork == AsyncWork::Report)
+	{
+		const bool success = uploadReport(asyncReportType, asyncMessage, asyncDiagnosticFiles,
+			asyncSessionFile, false, asyncReportId, asyncSourceMetadata);
+		auto completion = std::move(asyncCompletion);
+		asyncDiagnosticFiles.clear();
+		asyncSourceMetadata = {};
+		asyncWork = AsyncWork::Crash;
+		if (completion)
+			MessageManager::callAsync([completion, success]() { completion(success); });
+		return;
+	}
+
+	if (asyncWork == AsyncWork::PendingDiagnostics)
+	{
+		uploadPendingDiagnostics();
+		asyncWork = AsyncWork::Crash;
+		return;
+	}
+
 	uploadCrash();
 	MessageManager::getInstance()->stopDispatchLoop();
 }
