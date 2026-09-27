@@ -51,6 +51,7 @@ public:
 		const juce::String& reportId = {},
 		juce::var sourceMetadata = {},
 		std::function<void(bool)> completion = {});
+	bool retryQueuedReportsAsync();
 	bool uploadPendingDiagnosticsAsync();
 
 	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = provider; }
@@ -96,7 +97,7 @@ public:
 	std::function<void(const juce::Array<juce::File>&)> diagnosticFilesSentCallback;
 
 private:
-	enum class AsyncWork { Crash, Report, PendingDiagnostics };
+	enum class AsyncWork { Crash, Report, QueuedReports, PendingDiagnostics };
 	AsyncWork asyncWork = AsyncWork::Crash;
 	juce::String asyncReportType;
 	juce::String asyncMessage;
