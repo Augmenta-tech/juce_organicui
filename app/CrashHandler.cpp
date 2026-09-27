@@ -147,7 +147,7 @@ void CrashDumpUploader::uploadCrash()
 	}
 
 	uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
-		{}, recoveredFile, true);
+		{}, includeProjectFile ? recoveredFile : File(), true);
 
 	sleep(300);
 
@@ -539,6 +539,10 @@ CrashDumpUploader::UploadWindow::UploadWindow() :
 
 	addAndMakeVisible(mail);
 
+	includeProjectBT.setButtonText("Include the recovered project file");
+	includeProjectBT.setToggleState(true, dontSendNotification);
+	addAndMakeVisible(includeProjectBT);
+
 	addAndMakeVisible(&editor);
 	editor.setColour(editor.backgroundColourId, BG_COLOR.brighter(.3f));
 	editor.setColour(editor.textColourId, TEXT_COLOR.brighter());
@@ -579,6 +583,7 @@ void CrashDumpUploader::UploadWindow::resized()
 	progressUI.setBounds(r.removeFromBottom(30).reduced(20, 5));
 
 	mail.setBounds(r.removeFromTop(30).reduced(20, 0));
+	includeProjectBT.setBounds(r.removeFromTop(30).reduced(20, 0));
 
 	editor.setBounds(r.reduced(20));
 }
@@ -596,6 +601,7 @@ void CrashDumpUploader::UploadWindow::buttonClicked(Button* bt)
 	CrashDumpUploader::getInstance()->uploadFile = bt == &autoReopenBT || bt == &okBT;
 	CrashDumpUploader::getInstance()->crashMessage = editor.getText();
 	CrashDumpUploader::getInstance()->contactEmail = mail.getText();
+	CrashDumpUploader::getInstance()->includeProjectFile = includeProjectBT.getToggleState();
 	CrashDumpUploader::getInstance()->crashAction = (bt == &autoReopenBT || bt == &recoverOnlyBT) ? GlobalSettings::RECOVER : GlobalSettings::KILL;
 
 
