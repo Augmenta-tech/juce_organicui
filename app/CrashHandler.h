@@ -13,6 +13,7 @@ public:
 	juce::Image crashImage;
 
 	bool uploadFile;
+	bool includeProjectFile = true;
 	bool isTestCrash = false;
 	GlobalSettings::CrashAction crashAction;
 
@@ -73,6 +74,7 @@ public:
 		juce::TextButton cancelBT;
 		juce::TextButton autoReopenBT;
 		juce::TextButton recoverOnlyBT;
+		juce::ToggleButton includeProjectBT;
 		FloatSliderUI progressUI;
 
 		juce::Rectangle<int> imageRect;
