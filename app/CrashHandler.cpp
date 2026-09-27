@@ -220,7 +220,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 		.withParameter("version", getAppVersion())
 		.withParameter("message", message)
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
-		.withParameter("test", isTestCrash ? "1" : "0")
+		.withParameter("test", (reportType == "crash" && isTestCrash) ? "1" : "0")
 		.withParameter("report_type", reportType)
 		.withParameter("metadata", JSON::toString(metadata, true))
 		.withParameter("branch", channel);
@@ -253,7 +253,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 		.withConnectionTimeoutMs(5000);
 
 	std::unique_ptr<InputStream> stream(URL(url).createInputStream(options));
-	if (stream == nullptr || statusCode < 200 || statusCode >= 300)
+	if (stream == nullptr || (statusCode != 0 && (statusCode < 200 || statusCode >= 300)))
 	{
 		LOGWARNING("Failed to upload " + reportType + " report, status code = " + String(statusCode));
 		return false;
