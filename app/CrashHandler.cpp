@@ -199,12 +199,25 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 		}
 	}
 #endif
-	const String channel =
+	String channel =
 #if JUCE_DEBUG
 		"debug";
 #else
 		getAppVersion().containsChar('b') ? "beta" : "stable";
 #endif
+	if (auto* settings = GlobalSettings::getInstance())
+	{
+		if (settings->updateChannel != nullptr)
+		{
+			const String selectedChannel = settings->updateChannel->getValueData().toString();
+			if (selectedChannel == "stableversion")
+				channel = "stable";
+			else if (selectedChannel == "betaversion")
+				channel = "beta";
+			else if (selectedChannel.isNotEmpty())
+				channel = "custom";
+		}
+	}
 
 	std::time_t utcTime = std::time(nullptr);
 	std::tm utc = {};
