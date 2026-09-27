@@ -12,6 +12,9 @@
 #include "CrashHandler.h"
 
 #include <ctime>
+#if JUCE_LINUX
+#include <sys/utsname.h>
+#endif
 
 #if JUCE_WINDOWS
 #include <windows.h> 
@@ -213,6 +216,14 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 
 	var system(new DynamicObject());
 	system.getDynamicObject()->setProperty("os", SystemStats::getOperatingSystemName());
+#if JUCE_LINUX
+	struct utsname uts = {};
+	if (uname(&uts) == 0)
+	{
+		system.getDynamicObject()->setProperty("kernel", String(uts.release));
+		system.getDynamicObject()->setProperty("architecture", String(uts.machine));
+	}
+#endif
 	metadataObject->setProperty("system", system);
 
 	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
