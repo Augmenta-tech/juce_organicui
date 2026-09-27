@@ -223,6 +223,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	auto* metadataObject = metadata.getDynamicObject();
 	metadataObject->setProperty("schema_version", 1);
 	metadataObject->setProperty("report_type", reportType);
+	if (reportId.isNotEmpty())
+		metadataObject->setProperty("report_id", reportId);
 	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
 	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
 	metadataObject->setProperty("username", SystemStats::getFullUserName());
