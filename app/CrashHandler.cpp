@@ -166,7 +166,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	const String& message,
 	const Array<File>& diagnosticFiles,
 	File sessionFile,
-	bool includeCrashArtifacts)
+	bool includeCrashArtifacts,
+	const String& reportId)
 {
 	if (remoteURL.isEmpty())
 		return false;
@@ -233,6 +234,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
 		.withParameter("test", (reportType == "crash" && isTestCrash) ? "1" : "0")
 		.withParameter("report_type", reportType)
+		.withParameter("report_id", reportId)
 		.withParameter("metadata", JSON::toString(metadata, true))
 		.withParameter("branch", channel);
 
@@ -298,7 +300,8 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 		Array<File> singleFile;
 		singleFile.add(file);
 		const File session = diagnosticSessionProvider ? diagnosticSessionProvider() : File();
-		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false)
+		const String reportId = file.getParentDirectory().getFileName();
+		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false, reportId)
 			&& diagnosticFilesSentCallback)
 		{
 			diagnosticFilesSentCallback(singleFile);
