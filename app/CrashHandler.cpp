@@ -261,6 +261,20 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 #endif
 	metadataObject->setProperty("system", system);
 
+	if (additionalMetadataProvider)
+	{
+		try
+		{
+			const var context = additionalMetadataProvider();
+			if (!context.isVoid())
+				metadataObject->setProperty("application_context", context);
+		}
+		catch (...)
+		{
+			LOGWARNING("Could not collect optional report application context");
+		}
+	}
+
 	auto failAndCache = [&]()
 	{
 		if (cacheOnFailure)
