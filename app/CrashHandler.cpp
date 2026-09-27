@@ -139,12 +139,7 @@ void CrashDumpUploader::handleCrash(int e)
 void CrashDumpUploader::uploadCrash()
 {
 	if (remoteURL.isEmpty())
-	{
-		LOGWARNING("Crash dump upload url has not been assigned");
-		dumpFile.deleteFile();
-		traceFile.deleteFile();
-		return;
-	}
+		LOGWARNING("Crash dump upload url has not been assigned; caching approved report locally");
 
 	uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
 		{}, includeProjectFile ? recoveredFile : File(), true);
@@ -166,11 +161,10 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	File sessionFile,
 	bool includeCrashArtifacts,
 	const String& reportId,
-	var sourceMetadata)
+	var sourceMetadata,
+	bool cacheOnFailure,
+	bool flushPendingAfterSuccess)
 {
-	if (remoteURL.isEmpty())
-		return false;
-
 	const auto currentTime = Time::getCurrentTime();
 	String timezone = currentTime.getTimeZone();
 	String osName = SystemStats::getOperatingSystemName();
@@ -267,6 +261,17 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 #endif
 	metadataObject->setProperty("system", system);
 
+	auto failAndCache = [&]()
+	{
+		if (cacheOnFailure)
+			cacheFailedReport(reportType, message, effectiveReportId, metadata,
+				diagnosticFiles, sessionFile, includeCrashArtifacts);
+		return false;
+	};
+
+	if (remoteURL.isEmpty())
+		return failAndCache();
+
 	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
 		.withParameter("os", osName.replace(" ", "-"))
 		.withParameter("version", getAppVersion())
@@ -309,7 +314,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	if (stream == nullptr || (statusCode != 0 && (statusCode < 200 || statusCode >= 300)))
 	{
 		LOGWARNING("Failed to upload " + reportType + " report, status code = " + String(statusCode));
-		return false;
+		return failAndCache();
 	}
 
 	const String response = stream->readEntireStreamAsString();
@@ -319,13 +324,145 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	if (response.trim() != "ok")
 	{
 		LOGWARNING("Error from diagnostic report server: " + response);
-		return false;
+		return failAndCache();
 	}
 
 	LOG(reportType + " report uploaded successfully");
-	if (reportType != "freeze")
+	if (flushPendingAfterSuccess && reportType != "freeze")
 		uploadPendingDiagnostics();
 	return true;
+}
+
+File CrashDumpUploader::getPendingReportRoot() const
+{
+	return File::getSpecialLocation(File::userApplicationDataDirectory)
+		.getChildFile(getApp().getApplicationName())
+		.getChildFile("pending-reports");
+}
+
+void CrashDumpUploader::cacheFailedReport(const String& reportType,
+	const String& message,
+	const String& reportId,
+	const var& originalMetadata,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	bool includeCrashArtifacts)
+{
+	const File root = getPendingReportRoot();
+	if (!root.createDirectory().wasOk())
+	{
+		LOGWARNING("Could not create pending report directory");
+		return;
+	}
+
+	const File directory = root.getChildFile(File::createLegalFileName(reportId));
+	if (!directory.createDirectory().wasOk())
+	{
+		LOGWARNING("Could not create pending report entry");
+		return;
+	}
+
+	auto copy = [directory](const File& source, const String& name)
+	{
+		if (!source.existsAsFile())
+			return;
+		const File destination = directory.getChildFile(name);
+		destination.deleteFile();
+		source.copyFileTo(destination);
+	};
+
+	if (includeCrashArtifacts)
+	{
+		copy(traceFile, "trace" + traceFile.getFileExtension());
+		copy(dumpFile, "dump" + dumpFile.getFileExtension());
+	}
+	copy(sessionFile, "session" + sessionFile.getFileExtension());
+	for (int i = 0; i < diagnosticFiles.size(); ++i)
+		copy(diagnosticFiles.getReference(i),
+			"diagnostic-" + String(i) + diagnosticFiles.getReference(i).getFileExtension());
+
+	var manifest(new DynamicObject());
+	auto* object = manifest.getDynamicObject();
+	object->setProperty("schema_version", 1);
+	object->setProperty("created_ms", Time::currentTimeMillis());
+	object->setProperty("report_type", reportType);
+	object->setProperty("report_id", reportId);
+	object->setProperty("message", message);
+	object->setProperty("contact_email", contactEmail);
+	object->setProperty("include_crash_artifacts", includeCrashArtifacts);
+	object->setProperty("original_metadata", originalMetadata);
+
+	const File manifestFile = directory.getChildFile("report.json");
+	if (!manifestFile.replaceWithText(JSON::toString(manifest, true)))
+		LOGWARNING("Could not persist pending report manifest");
+	else
+		LOG("Cached " + reportType + " report " + reportId + " for retry");
+}
+
+void CrashDumpUploader::retryQueuedReports()
+{
+	const File root = getPendingReportRoot();
+	if (!root.isDirectory())
+		return;
+
+	Array<File> directories;
+	root.findChildFiles(directories, File::findDirectories, false);
+	const int64 nowMs = Time::currentTimeMillis();
+	constexpr int64 maxAgeMs = 180LL * 24LL * 60LL * 60LL * 1000LL;
+
+	for (const auto& directory : directories)
+	{
+		if (threadShouldExit())
+			break;
+
+		const File manifestFile = directory.getChildFile("report.json");
+		const var manifest = manifestFile.existsAsFile() ? JSON::parse(manifestFile.loadFileAsString()) : var();
+		if (!manifest.isObject())
+			continue;
+
+		const int64 createdMs = (int64) manifest.getProperty("created_ms", (int64) 0);
+		if (createdMs > 0 && nowMs - createdMs > maxAgeMs)
+		{
+			directory.deleteRecursively();
+			continue;
+		}
+
+		const String type = manifest.getProperty("report_type", "").toString();
+		const String id = manifest.getProperty("report_id", directory.getFileName()).toString();
+		const String queuedMessage = manifest.getProperty("message", "No message").toString();
+		const String queuedEmail = manifest.getProperty("contact_email", "").toString();
+		const bool includeCrash = (bool) manifest.getProperty("include_crash_artifacts", false);
+		const var originalMetadata = manifest.getProperty("original_metadata", var());
+
+		Array<File> files;
+		directory.findChildFiles(files, File::findFiles, false, "diagnostic-*");
+
+		Array<File> sessions;
+		directory.findChildFiles(sessions, File::findFiles, false, "session*");
+		const File session = sessions.isEmpty() ? File() : sessions.getFirst();
+
+		Array<File> traces;
+		Array<File> dumps;
+		directory.findChildFiles(traces, File::findFiles, false, "trace*");
+		directory.findChildFiles(dumps, File::findFiles, false, "dump*");
+
+		const File previousTrace = traceFile;
+		const File previousDump = dumpFile;
+		const String previousEmail = contactEmail;
+		traceFile = traces.isEmpty() ? File() : traces.getFirst();
+		dumpFile = dumps.isEmpty() ? File() : dumps.getFirst();
+		contactEmail = queuedEmail;
+
+		const bool sent = uploadReport(type, queuedMessage, files, session, includeCrash,
+			id, originalMetadata, false, false);
+
+		traceFile = previousTrace;
+		dumpFile = previousDump;
+		contactEmail = previousEmail;
+
+		if (sent)
+			directory.deleteRecursively();
+	}
 }
 
 bool CrashDumpUploader::uploadReportAsync(const String& reportType,
@@ -363,6 +500,8 @@ bool CrashDumpUploader::uploadPendingDiagnosticsAsync()
 
 void CrashDumpUploader::uploadPendingDiagnostics()
 {
+	retryQueuedReports();
+
 	if (!diagnosticFilesProvider)
 		return;
 
@@ -383,7 +522,8 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 			sourceMetadata = JSON::parse(reportFile.loadFileAsString());
 
 		const String reportId = file.getParentDirectory().getFileName();
-		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false, reportId, sourceMetadata)
+		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false,
+			reportId, sourceMetadata, false, false)
 			&& diagnosticFilesSentCallback)
 		{
 			diagnosticFilesSentCallback(singleFile);
