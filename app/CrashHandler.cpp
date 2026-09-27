@@ -143,6 +143,12 @@ void CrashDumpUploader::uploadCrash()
 	}
 
 	const auto currentTime = Time::getCurrentTime();
+	String timezone = currentTime.getTimeZone();
+#if JUCE_LINUX
+	const File timezoneFile("/etc/timezone");
+	if (timezoneFile.existsAsFile())
+		timezone = timezoneFile.loadFileAsString().trim();
+#endif
 	const String channel =
 #if JUCE_DEBUG
 		"debug";
@@ -168,7 +174,7 @@ void CrashDumpUploader::uploadCrash()
 	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
 	metadataObject->setProperty("username", SystemStats::getFullUserName());
 	metadataObject->setProperty("hostname", SystemStats::getComputerName());
-	metadataObject->setProperty("timezone", currentTime.getTimeZone());
+	metadataObject->setProperty("timezone", timezone);
 	metadataObject->setProperty("utc_offset", currentTime.getUTCOffsetString(true));
 
 	var application(new DynamicObject());
@@ -216,7 +222,7 @@ void CrashDumpUploader::uploadCrash()
 			continue;
 
 		LOG("Attaching diagnosticFile" << i << " " << file.getFullPathName());
-		url = url.withFileToUpload("diagnosticFile" + String(i), file, "application/gzip");
+		url = url.withFileToUpload(String("diagnosticFile") + String(i), file, "application/gzip");
 	}
 
 	std::function<bool(int, int)> callbackFunc = std::bind(&CrashDumpUploader::openStreamProgressCallback, this, std::placeholders::_1, std::placeholders::_2);
