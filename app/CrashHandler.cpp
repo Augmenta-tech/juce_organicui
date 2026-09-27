@@ -11,6 +11,8 @@
 #include "JuceHeader.h"
 #include "CrashHandler.h"
 
+#include <ctime>
+
 #if JUCE_WINDOWS
 #include <windows.h> 
 #include <DbgHelp.h>
@@ -140,18 +142,53 @@ void CrashDumpUploader::uploadCrash()
 		return;
 	}
 
+	const auto currentTime = Time::getCurrentTime();
+	const String channel =
+#if JUCE_DEBUG
+		"debug";
+#else
+		getAppVersion().containsChar('b') ? "beta" : "stable";
+#endif
+
+	std::time_t utcTime = std::time(nullptr);
+	std::tm utc = {};
+#if JUCE_WINDOWS
+	gmtime_s(&utc, &utcTime);
+#else
+	gmtime_r(&utcTime, &utc);
+#endif
+	char utcBuffer[32] = {};
+	std::strftime(utcBuffer, sizeof(utcBuffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+
+	var metadata(new DynamicObject());
+	auto* metadataObject = metadata.getDynamicObject();
+	metadataObject->setProperty("schema_version", 1);
+	metadataObject->setProperty("report_type", "crash");
+	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
+	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
+	metadataObject->setProperty("username", SystemStats::getFullUserName());
+	metadataObject->setProperty("hostname", SystemStats::getComputerName());
+	metadataObject->setProperty("timezone", currentTime.getTimeZone());
+	metadataObject->setProperty("utc_offset", currentTime.getUTCOffsetString(true));
+
+	var application(new DynamicObject());
+	application.getDynamicObject()->setProperty("version", getAppVersion());
+	application.getDynamicObject()->setProperty("channel", channel);
+	metadataObject->setProperty("application", application);
+
+	var system(new DynamicObject());
+	system.getDynamicObject()->setProperty("os", SystemStats::getOperatingSystemName());
+	metadataObject->setProperty("system", system);
+
 	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
 		.withParameter("os", SystemStats::getOperatingSystemName().replace(" ", "-"))
 		.withParameter("version", getAppVersion())
 		.withParameter("message", crashMessage.isNotEmpty() ? crashMessage : "No message")
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
 		.withParameter("test", isTestCrash ? "1" : "0")
-#if JUCE_DEBUG
-		.withParameter("branch", "debug")
-#else
-		.withParameter("branch", getAppVersion().containsChar('b') ? "beta" : "stable")
-#endif
-		;
+		.withParameter("report_type", "crash")
+		.withParameter("metadata", JSON::toString(metadata, true))
+		.withParameter("branch", channel);
 
 	if (dumpFile.existsAsFile())
 	{
@@ -169,6 +206,17 @@ void CrashDumpUploader::uploadCrash()
 	{
 		LOG("Attaching sessionFile " << recoveredFile.getFullPathName());
 		url = url.withFileToUpload("sessionFile", recoveredFile, "application/octet-stream");
+	}
+
+	const auto diagnosticFiles = diagnosticFilesProvider ? diagnosticFilesProvider() : Array<File>();
+	for (int i = 0; i < diagnosticFiles.size(); ++i)
+	{
+		const auto& file = diagnosticFiles.getReference(i);
+		if (!file.existsAsFile())
+			continue;
+
+		LOG("Attaching diagnosticFile" << i << " " << file.getFullPathName());
+		url = url.withFileToUpload("diagnosticFile" + String(i), file, "application/gzip");
 	}
 
 	std::function<bool(int, int)> callbackFunc = std::bind(&CrashDumpUploader::openStreamProgressCallback, this, std::placeholders::_1, std::placeholders::_2);
@@ -217,7 +265,8 @@ void CrashDumpUploader::uploadCrash()
 	else if (convertedData.contains("ok"))
 	{
 		LOG("Crash log uploaded succesfully");
-		//crashFile.deleteFile();
+		if (diagnosticFilesSentCallback && !diagnosticFiles.isEmpty())
+			diagnosticFilesSentCallback(diagnosticFiles);
 	}
 	else
 	{
