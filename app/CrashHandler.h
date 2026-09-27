@@ -41,6 +41,14 @@ public:
 		const juce::String& reportId = {},
 		juce::var sourceMetadata = {});
 	void uploadPendingDiagnostics();
+	bool uploadReportAsync(const juce::String& reportType,
+		const juce::String& message,
+		const juce::Array<juce::File>& diagnosticFiles = {},
+		juce::File sessionFile = {},
+		const juce::String& reportId = {},
+		juce::var sourceMetadata = {},
+		std::function<void(bool)> completion = {});
+	bool uploadPendingDiagnosticsAsync();
 
 	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = provider; }
 	void setDiagnosticSessionProvider(std::function<juce::File()> provider) { diagnosticSessionProvider = provider; }
@@ -82,6 +90,17 @@ public:
 	std::function<juce::Array<juce::File>()> diagnosticFilesProvider;
 	std::function<juce::File()> diagnosticSessionProvider;
 	std::function<void(const juce::Array<juce::File>&)> diagnosticFilesSentCallback;
+
+private:
+	enum class AsyncWork { Crash, Report, PendingDiagnostics };
+	AsyncWork asyncWork = AsyncWork::Crash;
+	juce::String asyncReportType;
+	juce::String asyncMessage;
+	juce::Array<juce::File> asyncDiagnosticFiles;
+	juce::File asyncSessionFile;
+	juce::String asyncReportId;
+	juce::var asyncSourceMetadata;
+	std::function<void(bool)> asyncCompletion;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CrashDumpUploader)
 
