@@ -40,7 +40,9 @@ public:
 		juce::File sessionFile = {},
 		bool includeCrashArtifacts = false,
 		const juce::String& reportId = {},
-		juce::var sourceMetadata = {});
+		juce::var sourceMetadata = {},
+		bool cacheOnFailure = true,
+		bool flushPendingAfterSuccess = true);
 	void uploadPendingDiagnostics();
 	bool uploadReportAsync(const juce::String& reportType,
 		const juce::String& message,
@@ -103,6 +105,16 @@ private:
 	juce::String asyncReportId;
 	juce::var asyncSourceMetadata;
 	std::function<void(bool)> asyncCompletion;
+
+	juce::File getPendingReportRoot() const;
+	void cacheFailedReport(const juce::String& reportType,
+		const juce::String& message,
+		const juce::String& reportId,
+		const juce::var& originalMetadata,
+		const juce::Array<juce::File>& diagnosticFiles,
+		juce::File sessionFile,
+		bool includeCrashArtifacts);
+	void retryQueuedReports();
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CrashDumpUploader)
 
