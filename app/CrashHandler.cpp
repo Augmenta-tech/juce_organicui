@@ -164,7 +164,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	const Array<File>& diagnosticFiles,
 	File sessionFile,
 	bool includeCrashArtifacts,
-	const String& reportId)
+	const String& reportId,
+	var sourceMetadata)
 {
 	if (remoteURL.isEmpty())
 		return false;
@@ -235,6 +236,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	metadataObject->setProperty("report_type", reportType);
 	if (reportId.isNotEmpty())
 		metadataObject->setProperty("report_id", reportId);
+	if (sourceMetadata.isObject())
+		metadataObject->setProperty("source_report", sourceMetadata);
 	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
 	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
 	metadataObject->setProperty("username", SystemStats::getFullUserName());
@@ -337,8 +340,13 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 		Array<File> singleFile;
 		singleFile.add(file);
 		const File session = diagnosticSessionProvider ? diagnosticSessionProvider() : File();
+		const File reportFile = file.getParentDirectory().getChildFile("report.json");
+		var sourceMetadata;
+		if (reportFile.existsAsFile())
+			sourceMetadata = JSON::parse(reportFile.loadFileAsString());
+
 		const String reportId = file.getParentDirectory().getFileName();
-		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false, reportId)
+		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false, reportId, sourceMetadata)
 			&& diagnosticFilesSentCallback)
 		{
 			diagnosticFilesSentCallback(singleFile);
