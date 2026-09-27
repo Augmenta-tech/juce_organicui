@@ -142,6 +142,32 @@ void CrashDumpUploader::uploadCrash()
 		return;
 	}
 
+	if (uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
+		{}, recoveredFile, true))
+	{
+		uploadPendingDiagnostics();
+	}
+
+	sleep(300);
+
+	if (w != nullptr)
+	{
+		if (DialogWindow* dw = w->findParentComponentOfClass<DialogWindow>()) dw->exitModalState(0);
+		MessageManagerLock mmLock;
+		w->removeFromDesktop();
+		w.reset();
+	}
+}
+
+bool CrashDumpUploader::uploadReport(const String& reportType,
+	const String& message,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	bool includeCrashArtifacts)
+{
+	if (remoteURL.isEmpty())
+		return false;
+
 	const auto currentTime = Time::getCurrentTime();
 	String timezone = currentTime.getTimeZone();
 #if JUCE_LINUX
@@ -169,7 +195,7 @@ void CrashDumpUploader::uploadCrash()
 	var metadata(new DynamicObject());
 	auto* metadataObject = metadata.getDynamicObject();
 	metadataObject->setProperty("schema_version", 1);
-	metadataObject->setProperty("report_type", "crash");
+	metadataObject->setProperty("report_type", reportType);
 	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
 	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
 	metadataObject->setProperty("username", SystemStats::getFullUserName());
@@ -180,6 +206,9 @@ void CrashDumpUploader::uploadCrash()
 	var application(new DynamicObject());
 	application.getDynamicObject()->setProperty("version", getAppVersion());
 	application.getDynamicObject()->setProperty("channel", channel);
+#ifdef AUGMENTA_BUILD_NUMBER
+	application.getDynamicObject()->setProperty("build_number", AUGMENTA_BUILD_NUMBER);
+#endif
 	metadataObject->setProperty("application", application);
 
 	var system(new DynamicObject());
@@ -189,106 +218,81 @@ void CrashDumpUploader::uploadCrash()
 	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
 		.withParameter("os", SystemStats::getOperatingSystemName().replace(" ", "-"))
 		.withParameter("version", getAppVersion())
-		.withParameter("message", crashMessage.isNotEmpty() ? crashMessage : "No message")
+		.withParameter("message", message)
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
 		.withParameter("test", isTestCrash ? "1" : "0")
-		.withParameter("report_type", "crash")
+		.withParameter("report_type", reportType)
 		.withParameter("metadata", JSON::toString(metadata, true))
 		.withParameter("branch", channel);
 
-	if (dumpFile.existsAsFile())
-	{
-		LOG("Attaching dumpFile " << dumpFile.getFullPathName());
+	if (includeCrashArtifacts && dumpFile.existsAsFile())
 		url = url.withFileToUpload("dumpFile", dumpFile, "application/octet-stream");
-	}
 
-	if (traceFile.existsAsFile())
-	{
-		LOG("Attaching traceFile " << traceFile.getFullPathName());
-		url = url.withFileToUpload("traceFile", traceFile, "application/octet-stream");
-	}
+	if (includeCrashArtifacts && traceFile.existsAsFile())
+		url = url.withFileToUpload("traceFile", traceFile, "text/plain");
 
-	if (recoveredFile.existsAsFile())
-	{
-		LOG("Attaching sessionFile " << recoveredFile.getFullPathName());
-		url = url.withFileToUpload("sessionFile", recoveredFile, "application/octet-stream");
-	}
+	if (sessionFile.existsAsFile())
+		url = url.withFileToUpload("sessionFile", sessionFile, "application/octet-stream");
 
-	const auto diagnosticFiles = diagnosticFilesProvider ? diagnosticFilesProvider() : Array<File>();
 	for (int i = 0; i < diagnosticFiles.size(); ++i)
 	{
 		const auto& file = diagnosticFiles.getReference(i);
-		if (!file.existsAsFile())
-			continue;
-
-		LOG("Attaching diagnosticFile" << i << " " << file.getFullPathName());
-		url = url.withFileToUpload(String("diagnosticFile") + String(i), file, "application/gzip");
+		if (file.existsAsFile())
+			url = url.withFileToUpload(String("diagnosticFile") + String(i), file, "application/gzip");
 	}
 
-	std::function<bool(int, int)> callbackFunc = std::bind(&CrashDumpUploader::openStreamProgressCallback, this, std::placeholders::_1, std::placeholders::_2);
+	std::function<bool(int, int)> callbackFunc = std::bind(
+		&CrashDumpUploader::openStreamProgressCallback, this,
+		std::placeholders::_1, std::placeholders::_2);
 	int statusCode = 0;
 
 	URL::InputStreamOptions options = URL::InputStreamOptions(URL::ParameterHandling::inPostData)
 		.withExtraHeaders("Cache-Control: no-cache")
 		.withProgressCallback(callbackFunc)
 		.withStatusCode(&statusCode)
-		.withConnectionTimeoutMs(5000)
-		;
+		.withConnectionTimeoutMs(5000);
 
 	std::unique_ptr<InputStream> stream(URL(url).createInputStream(options));
-
-	bool failed = stream == nullptr;
-
-#if JUCE_WINDOWS
-	if (statusCode != 200) failed = true;
-#endif
-
-	if (failed)
+	if (stream == nullptr || statusCode < 200 || statusCode >= 300)
 	{
-		LOGWARNING("Failed to connect, status code = " + String(statusCode));
-
-		if (w != nullptr)
-		{
-			if (DialogWindow* dw = w->findParentComponentOfClass<DialogWindow>()) dw->exitModalState(0);
-			MessageManagerLock mmLock;
-			w->removeFromDesktop();
-			w.reset();
-		}
-
-		return;
+		LOGWARNING("Failed to upload " + reportType + " report, status code = " + String(statusCode));
+		return false;
 	}
 
-	String convertedData = stream->readEntireStreamAsString();
-
+	const String response = stream->readEntireStreamAsString();
 #if JUCE_DEBUG
-	LOG("Received : " << convertedData);
+	LOG("Received : " << response);
 #endif
-
-	if (convertedData.contains("error"))
+	if (!response.contains("ok"))
 	{
-		LOGWARNING("Error during upload : " << convertedData);
-	}
-	else if (convertedData.contains("ok"))
-	{
-		LOG("Crash log uploaded succesfully");
-		if (diagnosticFilesSentCallback && !diagnosticFiles.isEmpty())
-			diagnosticFilesSentCallback(diagnosticFiles);
-	}
-	else
-	{
-		LOGWARNING("Unknown message from crash log server " << convertedData << " (code " << String(statusCode) << ")");
+		LOGWARNING("Error from diagnostic report server: " + response);
+		return false;
 	}
 
-	sleep(300);
+	LOG(reportType + " report uploaded successfully");
+	return true;
+}
 
-	if (w != nullptr)
+void CrashDumpUploader::uploadPendingDiagnostics()
+{
+	if (!diagnosticFilesProvider)
+		return;
+
+	const auto files = diagnosticFilesProvider();
+	for (const auto& file : files)
 	{
-		if (DialogWindow* dw = w->findParentComponentOfClass<DialogWindow>()) dw->exitModalState(0);
-		MessageManagerLock mmLock;
-		w->removeFromDesktop();
-		w.reset();
-	}
+		if (!file.existsAsFile())
+			continue;
 
+		Array<File> singleFile;
+		singleFile.add(file);
+		const File session = diagnosticSessionProvider ? diagnosticSessionProvider() : File();
+		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false)
+			&& diagnosticFilesSentCallback)
+		{
+			diagnosticFilesSentCallback(singleFile);
+		}
+	}
 }
 
 bool CrashDumpUploader::openStreamProgressCallback(int bytesDownloaded, int totalLength)
