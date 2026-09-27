@@ -33,8 +33,15 @@ public:
 
 	void run();
 	void uploadCrash();
+	bool uploadReport(const juce::String& reportType,
+		const juce::String& message,
+		const juce::Array<juce::File>& diagnosticFiles = {},
+		juce::File sessionFile = {},
+		bool includeCrashArtifacts = false);
+	void uploadPendingDiagnostics();
 
 	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = provider; }
+	void setDiagnosticSessionProvider(std::function<juce::File()> provider) { diagnosticSessionProvider = provider; }
 	void setDiagnosticFilesSentCallback(std::function<void(const juce::Array<juce::File>&)> callback) { diagnosticFilesSentCallback = callback; }
 
 	bool openStreamProgressCallback(int /*bytesSent*/, int /*totalBytes*/);
@@ -71,6 +78,7 @@ public:
 	std::unique_ptr<UploadWindow> w;
 
 	std::function<juce::Array<juce::File>()> diagnosticFilesProvider;
+	std::function<juce::File()> diagnosticSessionProvider;
 	std::function<void(const juce::Array<juce::File>&)> diagnosticFilesSentCallback;
 
 	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CrashDumpUploader)
