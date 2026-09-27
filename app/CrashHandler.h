@@ -34,8 +34,8 @@ public:
 	void run();
 	void uploadCrash();
 
-	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = std::move(provider); }
-	void setDiagnosticFilesSentCallback(std::function<void(const juce::Array<juce::File>&)> callback) { diagnosticFilesSentCallback = std::move(callback); }
+	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = provider; }
+	void setDiagnosticFilesSentCallback(std::function<void(const juce::Array<juce::File>&)> callback) { diagnosticFilesSentCallback = callback; }
 
 	bool openStreamProgressCallback(int /*bytesSent*/, int /*totalBytes*/);
 
