@@ -145,11 +145,8 @@ void CrashDumpUploader::uploadCrash()
 		return;
 	}
 
-	if (uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
-		{}, recoveredFile, true))
-	{
-		uploadPendingDiagnostics();
-	}
+	uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
+		{}, recoveredFile, true);
 
 	sleep(300);
 
@@ -308,6 +305,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	}
 
 	LOG(reportType + " report uploaded successfully");
+	if (reportType != "freeze")
+		uploadPendingDiagnostics();
 	return true;
 }
 
