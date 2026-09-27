@@ -174,10 +174,33 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 
 	const auto currentTime = Time::getCurrentTime();
 	String timezone = currentTime.getTimeZone();
+	String osName = SystemStats::getOperatingSystemName();
 #if JUCE_LINUX
 	const File timezoneFile("/etc/timezone");
 	if (timezoneFile.existsAsFile())
 		timezone = timezoneFile.loadFileAsString().trim();
+
+	const File osReleaseFile("/etc/os-release");
+	if (osReleaseFile.existsAsFile())
+	{
+		StringArray lines;
+		lines.addLines(osReleaseFile.loadFileAsString());
+		for (const auto& line : lines)
+		{
+			if (!line.startsWith("PRETTY_NAME="))
+				continue;
+
+			auto value = line.fromFirstOccurrenceOf("=", false, false).trim();
+			if (value.length() >= 2
+				&& ((value.startsWithChar('"') && value.endsWithChar('"'))
+					|| (value.startsWithChar('\'') && value.endsWithChar('\''))))
+				value = value.substring(1, value.length() - 1);
+
+			if (value.isNotEmpty())
+				osName = value;
+			break;
+		}
+	}
 #endif
 	const String channel =
 #if JUCE_DEBUG
@@ -216,7 +239,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	metadataObject->setProperty("application", application);
 
 	var system(new DynamicObject());
-	system.getDynamicObject()->setProperty("os", SystemStats::getOperatingSystemName());
+	system.getDynamicObject()->setProperty("os", osName);
 #if JUCE_LINUX
 	struct utsname uts = {};
 	if (uname(&uts) == 0)
@@ -228,7 +251,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	metadataObject->setProperty("system", system);
 
 	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
-		.withParameter("os", SystemStats::getOperatingSystemName().replace(" ", "-"))
+		.withParameter("os", osName.replace(" ", "-"))
 		.withParameter("version", getAppVersion())
 		.withParameter("message", message)
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
