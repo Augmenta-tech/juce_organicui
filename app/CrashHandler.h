@@ -92,6 +92,7 @@ public:
 
 	std::unique_ptr<UploadWindow> w;
 
+	std::function<juce::var()> additionalMetadataProvider;
 	std::function<juce::Array<juce::File>()> diagnosticFilesProvider;
 	std::function<juce::File()> diagnosticSessionProvider;
 	std::function<void(const juce::Array<juce::File>&)> diagnosticFilesSentCallback;
