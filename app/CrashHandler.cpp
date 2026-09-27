@@ -231,12 +231,13 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	char utcBuffer[32] = {};
 	std::strftime(utcBuffer, sizeof(utcBuffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
 
+	const String effectiveReportId = reportId.isNotEmpty() ? reportId : Uuid().toString();
+
 	var metadata(new DynamicObject());
 	auto* metadataObject = metadata.getDynamicObject();
 	metadataObject->setProperty("schema_version", 1);
 	metadataObject->setProperty("report_type", reportType);
-	if (reportId.isNotEmpty())
-		metadataObject->setProperty("report_id", reportId);
+	metadataObject->setProperty("report_id", effectiveReportId);
 	if (sourceMetadata.isObject())
 		metadataObject->setProperty("source_report", sourceMetadata);
 	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
@@ -273,7 +274,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
 		.withParameter("test", (reportType == "crash" && isTestCrash) ? "1" : "0")
 		.withParameter("report_type", reportType)
-		.withParameter("report_id", reportId)
+		.withParameter("report_id", effectiveReportId)
 		.withParameter("metadata", JSON::toString(metadata, true))
 		.withParameter("branch", channel);
 
