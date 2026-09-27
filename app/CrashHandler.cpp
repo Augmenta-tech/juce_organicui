@@ -328,8 +328,8 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	}
 
 	LOG(reportType + " report uploaded successfully");
-	if (flushPendingAfterSuccess && reportType != "freeze")
-		uploadPendingDiagnostics();
+	if (flushPendingAfterSuccess)
+		retryQueuedReports();
 	return true;
 }
 
@@ -488,6 +488,16 @@ bool CrashDumpUploader::uploadReportAsync(const String& reportType,
 	return true;
 }
 
+bool CrashDumpUploader::retryQueuedReportsAsync()
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::QueuedReports;
+	startThread();
+	return true;
+}
+
 bool CrashDumpUploader::uploadPendingDiagnosticsAsync()
 {
 	if (isThreadRunning())
@@ -573,6 +583,13 @@ void CrashDumpUploader::run()
 		asyncWork = AsyncWork::Crash;
 		if (completion)
 			MessageManager::callAsync([completion, success]() { completion(success); });
+		return;
+	}
+
+	if (asyncWork == AsyncWork::QueuedReports)
+	{
+		retryQueuedReports();
+		asyncWork = AsyncWork::Crash;
 		return;
 	}
 
