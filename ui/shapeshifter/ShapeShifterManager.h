@@ -67,7 +67,7 @@ public:
 	template<class T>
 	T * getContentForType();
 
-	ShapeShifterPanel * checkCandidateTargetForPanel(ShapeShifterPanel * panel, juce::Point<int> screenPoint);
+	ShapeShifterPanel * checkCandidateTargetForPanel(ShapeShifterPanel * panel);
 	bool checkDropOnCandidateTarget(juce::WeakReference<ShapeShifterPanel> panel);
 
 	ShapeShifterWindow * getWindowForPanel(ShapeShifterPanel * panel);
