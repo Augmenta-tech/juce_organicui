@@ -42,6 +42,7 @@ CrashDumpUploader::CrashDumpUploader() :
 
 CrashDumpUploader::~CrashDumpUploader()
 {
+	stopThread(6000);
 }
 
 void CrashDumpUploader::init(const String& url, Image image)
@@ -367,6 +368,8 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 	const auto files = diagnosticFilesProvider();
 	for (const auto& file : files)
 	{
+		if (threadShouldExit())
+			break;
 		if (!file.existsAsFile())
 			continue;
 
@@ -389,7 +392,8 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 
 bool CrashDumpUploader::openStreamProgressCallback(int bytesDownloaded, int totalLength)
 {
-	progress.setValue(bytesDownloaded * 1.0f / totalLength);
+	if (totalLength > 0)
+		progress.setValue(bytesDownloaded * 1.0f / totalLength);
 	LOG("Progress " << (int)(progress.floatValue() * 100) << "%");
 	return !threadShouldExit();
 }
