@@ -38,7 +38,8 @@ public:
 		const juce::Array<juce::File>& diagnosticFiles = {},
 		juce::File sessionFile = {},
 		bool includeCrashArtifacts = false,
-		const juce::String& reportId = {});
+		const juce::String& reportId = {},
+		juce::var sourceMetadata = {});
 	void uploadPendingDiagnostics();
 
 	void setDiagnosticFilesProvider(std::function<juce::Array<juce::File>()> provider) { diagnosticFilesProvider = provider; }
