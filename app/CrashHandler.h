@@ -13,6 +13,7 @@ public:
 	juce::Image crashImage;
 
 	bool uploadFile;
+	bool isTestCrash = false;
 	GlobalSettings::CrashAction crashAction;
 
 	juce::File traceFile;

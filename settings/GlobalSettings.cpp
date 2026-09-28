@@ -237,6 +237,7 @@ void GlobalSettings::onControllableFeedbackUpdate(ControllableContainer* cc, Con
 	}
 	else if (c == testCrash)
 	{
+		CrashDumpUploader::getInstance()->isTestCrash = true;
 #if JUCE_DEBUG
 		CrashDumpUploader::getInstance()->handleCrash(0); //win only
 #else

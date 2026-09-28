@@ -184,11 +184,25 @@ bool AppUpdater::updateTargetChannelLatestVersionAndUpdateAvailable()
 	targetChannel = GlobalSettings::getInstance()->updateChannel->getValueData();
 	String currentChannel = Engine::mainEngine->updateChannel;
 
-	// Extract the desired channel's info from the update json file 
-	const var updateDataForTargetChannel = updateData.getProperty(targetChannel, var());
-
-	const AppVersion targetVersion = AppVersion(updateDataForTargetChannel.getProperty("version", ""));
 	const AppVersion currentVersion(getAppVersion());
+
+	//Still prefer newer stable version, even if the user is on a beta channel, unless the user is on a custom channel.
+	var updateDataForTargetChannel = updateData.getProperty(targetChannel, var());
+	AppVersion targetVersion(updateDataForTargetChannel.getProperty("version", ""));
+
+	// Beta users should also be notified when a stable release supersedes their version.
+	if (targetChannel == "betaversion")
+	{
+		const var stableUpdateData = updateData.getProperty("stableversion", var());
+		const AppVersion stableVersion(stableUpdateData.getProperty("version", ""));
+		if (targetVersion < stableVersion)
+		{
+			targetChannel = "stableversion";
+			updateDataForTargetChannel = stableUpdateData;
+			targetVersion = stableVersion;
+		}
+	}
+
 	const bool isChangingChannel = currentChannel != targetChannel;
 	updateAvailable = currentVersion < targetVersion || (isChangingChannel && currentVersion <= targetVersion);
 	
@@ -307,6 +321,30 @@ void AppUpdater::finished(URL::DownloadTask* task, bool success)
 	{
 		LOGERROR("Wrong file size, try downloading it directly from the website");
 		return;
+	}
+
+	int checksumStatusCode = 0;
+	auto checksumStream = URL(downloadURLBase + downloadingFileName + ".sha256").createInputStream(
+		URL::InputStreamOptions(URL::ParameterHandling::inAddress)
+			.withExtraHeaders("Cache-Control: no-cache")
+			.withStatusCode(&checksumStatusCode)
+			.withConnectionTimeoutMs(5000));
+
+	if (checksumStream != nullptr && checksumStatusCode == 200)
+	{
+		const String expectedSHA256 = checksumStream->readEntireStreamAsString().trim();
+		if (!expectedSHA256.equalsIgnoreCase(juce::SHA256(f).toHexString()))
+		{
+			LOGERROR("SHA-256 verification failed for " + downloadingFileName);
+			f.deleteFile();
+			queuedNotifier.addMessage(new AppUpdateEvent(AppUpdateEvent::DOWNLOAD_ERROR));
+			return;
+		}
+		LOG("SHA-256 verified for " + downloadingFileName);
+	}
+	else
+	{
+		LOGWARNING("No SHA-256 checksum available for " + downloadingFileName + ", continuing without verification");
 	}
 
 	if (extension == "zip")
