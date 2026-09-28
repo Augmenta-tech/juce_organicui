@@ -141,8 +141,10 @@ void CrashDumpUploader::uploadCrash()
 	if (remoteURL.isEmpty())
 		LOGWARNING("Crash dump upload url has not been assigned; caching approved report locally");
 
+	// Do not hold the crash-exit path open while flushing older queued reports.
+	// They are retried independently on the next normal application start.
 	uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
-		{}, includeProjectFile ? recoveredFile : File(), true);
+		{}, includeProjectFile ? recoveredFile : File(), true, String(), var(), true, false);
 
 	sleep(300);
 
@@ -165,6 +167,20 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	bool cacheOnFailure,
 	bool flushPendingAfterSuccess)
 {
+	if (reportType != "crash" && reportType != "freeze"
+		&& reportType != "bug" && reportType != "vulnerability")
+	{
+		LOGWARNING("Refusing unsupported diagnostic report type: " + reportType);
+		return false;
+	}
+
+	// Security reports deliberately carry no project/crash/diagnostic attachment.
+	// Enforce that in the transport as well as in the Pleiades UI and PHP relay.
+	const bool securityReport = reportType == "vulnerability";
+	const Array<File> filesToUpload = securityReport ? Array<File>() : diagnosticFiles;
+	const File sessionToUpload = securityReport ? File() : sessionFile;
+	includeCrashArtifacts = includeCrashArtifacts && !securityReport;
+
 	const auto currentTime = Time::getCurrentTime();
 	String timezone = currentTime.getTimeZone();
 	String osName = SystemStats::getOperatingSystemName();
@@ -279,7 +295,7 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	{
 		if (cacheOnFailure)
 			cacheFailedReport(reportType, message, effectiveReportId, metadata,
-				diagnosticFiles, sessionFile, includeCrashArtifacts);
+				filesToUpload, sessionToUpload, includeCrashArtifacts);
 		return false;
 	};
 
@@ -303,12 +319,13 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 	if (includeCrashArtifacts && traceFile.existsAsFile())
 		url = url.withFileToUpload("traceFile", traceFile, "text/plain");
 
-	if (sessionFile.existsAsFile())
-		url = url.withFileToUpload("sessionFile", sessionFile, "application/octet-stream");
+	if (sessionToUpload.existsAsFile())
+		url = url.withFileToUpload("sessionFile", sessionToUpload, "application/octet-stream");
 
-	for (int i = 0; i < diagnosticFiles.size(); ++i)
+	const int diagnosticCount = jmin(8, filesToUpload.size());
+	for (int i = 0; i < diagnosticCount; ++i)
 	{
-		const auto& file = diagnosticFiles.getReference(i);
+		const auto& file = filesToUpload.getReference(i);
 		if (file.existsAsFile())
 			url = url.withFileToUpload(String("diagnosticFile") + String(i), file, "application/gzip");
 	}
@@ -378,7 +395,8 @@ void CrashDumpUploader::cacheFailedReport(const String& reportType,
 
 	auto copy = [directory](const File& source, const String& name)
 	{
-		if (!source.existsAsFile())
+		constexpr int64 maxCachedAttachmentBytes = 80LL * 1024LL * 1024LL;
+		if (!source.existsAsFile() || source.getSize() > maxCachedAttachmentBytes)
 			return;
 		const File destination = directory.getChildFile(name);
 		destination.deleteFile();
@@ -408,9 +426,26 @@ void CrashDumpUploader::cacheFailedReport(const String& reportType,
 
 	const File manifestFile = directory.getChildFile("report.json");
 	if (!manifestFile.replaceWithText(JSON::toString(manifest, true)))
+	{
 		LOGWARNING("Could not persist pending report manifest");
-	else
-		LOG("Cached " + reportType + " report " + reportId + " for retry");
+		return;
+	}
+
+	LOG("Cached " + reportType + " report " + reportId + " for retry");
+
+	// Keep offline retry storage bounded. Ten approved reports cover normal
+	// transient outages without allowing months of failures to grow unbounded.
+	Array<File> pending;
+	root.findChildFiles(pending, File::findDirectories, false);
+	while (pending.size() > 10)
+	{
+		int oldest = 0;
+		for (int i = 1; i < pending.size(); ++i)
+			if (pending[i].getLastModificationTime() < pending[oldest].getLastModificationTime())
+				oldest = i;
+		pending[oldest].deleteRecursively();
+		pending.remove(oldest);
+	}
 }
 
 void CrashDumpUploader::retryQueuedReports()
@@ -442,6 +477,9 @@ void CrashDumpUploader::retryQueuedReports()
 		}
 
 		const String type = manifest.getProperty("report_type", "").toString();
+		if (type != "crash" && type != "freeze" && type != "bug" && type != "vulnerability")
+			continue;
+
 		const String id = manifest.getProperty("report_id", directory.getFileName()).toString();
 		const String queuedMessage = manifest.getProperty("message", "No message").toString();
 		const String queuedEmail = manifest.getProperty("contact_email", "").toString();
@@ -476,6 +514,8 @@ void CrashDumpUploader::retryQueuedReports()
 
 		if (sent)
 			directory.deleteRecursively();
+		else
+			break; // usually means offline; avoid one full timeout per queued report
 	}
 }
 
