@@ -11,6 +11,11 @@
 #include "JuceHeader.h"
 #include "CrashHandler.h"
 
+#include <ctime>
+#if JUCE_LINUX
+#include <sys/utsname.h>
+#endif
+
 #if JUCE_WINDOWS
 #include <windows.h> 
 #include <DbgHelp.h>
@@ -37,6 +42,7 @@ CrashDumpUploader::CrashDumpUploader() :
 
 CrashDumpUploader::~CrashDumpUploader()
 {
+	stopThread(6000);
 }
 
 void CrashDumpUploader::init(const String& url, Image image)
@@ -133,96 +139,12 @@ void CrashDumpUploader::handleCrash(int e)
 void CrashDumpUploader::uploadCrash()
 {
 	if (remoteURL.isEmpty())
-	{
-		LOGWARNING("Crash dump upload url has not been assigned");
-		dumpFile.deleteFile();
-		traceFile.deleteFile();
-		return;
-	}
+		LOGWARNING("Crash dump upload url has not been assigned; caching approved report locally");
 
-	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
-		.withParameter("os", SystemStats::getOperatingSystemName().replace(" ", "-"))
-		.withParameter("version", getAppVersion())
-		.withParameter("message", crashMessage.isNotEmpty() ? crashMessage : "No message")
-		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
-		.withParameter("test", isTestCrash ? "1" : "0")
-#if JUCE_DEBUG
-		.withParameter("branch", "debug")
-#else
-		.withParameter("branch", getAppVersion().containsChar('b') ? "beta" : "stable")
-#endif
-		;
-
-	if (dumpFile.existsAsFile())
-	{
-		LOG("Attaching dumpFile " << dumpFile.getFullPathName());
-		url = url.withFileToUpload("dumpFile", dumpFile, "application/octet-stream");
-	}
-
-	if (traceFile.existsAsFile())
-	{
-		LOG("Attaching traceFile " << traceFile.getFullPathName());
-		url = url.withFileToUpload("traceFile", traceFile, "application/octet-stream");
-	}
-
-	if (recoveredFile.existsAsFile())
-	{
-		LOG("Attaching sessionFile " << recoveredFile.getFullPathName());
-		url = url.withFileToUpload("sessionFile", recoveredFile, "application/octet-stream");
-	}
-
-	std::function<bool(int, int)> callbackFunc = std::bind(&CrashDumpUploader::openStreamProgressCallback, this, std::placeholders::_1, std::placeholders::_2);
-	int statusCode = 0;
-
-	URL::InputStreamOptions options = URL::InputStreamOptions(URL::ParameterHandling::inPostData)
-		.withExtraHeaders("Cache-Control: no-cache")
-		.withProgressCallback(callbackFunc)
-		.withStatusCode(&statusCode)
-		.withConnectionTimeoutMs(5000)
-		;
-
-	std::unique_ptr<InputStream> stream(URL(url).createInputStream(options));
-
-	bool failed = stream == nullptr;
-
-#if JUCE_WINDOWS
-	if (statusCode != 200) failed = true;
-#endif
-
-	if (failed)
-	{
-		LOGWARNING("Failed to connect, status code = " + String(statusCode));
-
-		if (w != nullptr)
-		{
-			if (DialogWindow* dw = w->findParentComponentOfClass<DialogWindow>()) dw->exitModalState(0);
-			MessageManagerLock mmLock;
-			w->removeFromDesktop();
-			w.reset();
-		}
-
-		return;
-	}
-
-	String convertedData = stream->readEntireStreamAsString();
-
-#if JUCE_DEBUG
-	LOG("Received : " << convertedData);
-#endif
-
-	if (convertedData.contains("error"))
-	{
-		LOGWARNING("Error during upload : " << convertedData);
-	}
-	else if (convertedData.contains("ok"))
-	{
-		LOG("Crash log uploaded succesfully");
-		//crashFile.deleteFile();
-	}
-	else
-	{
-		LOGWARNING("Unknown message from crash log server " << convertedData << " (code " << String(statusCode) << ")");
-	}
+	// Do not hold the crash-exit path open while flushing older queued reports.
+	// They are retried independently on the next normal application start.
+	uploadReport("crash", crashMessage.isNotEmpty() ? crashMessage : "No message",
+		{}, includeProjectFile ? recoveredFile : File(), true, String(), var(), true, false);
 
 	sleep(300);
 
@@ -233,12 +155,462 @@ void CrashDumpUploader::uploadCrash()
 		w->removeFromDesktop();
 		w.reset();
 	}
+}
 
+bool CrashDumpUploader::uploadReport(const String& reportType,
+	const String& message,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	bool includeCrashArtifacts,
+	const String& reportId,
+	var sourceMetadata,
+	bool cacheOnFailure,
+	bool flushPendingAfterSuccess)
+{
+	if (reportType != "crash" && reportType != "freeze"
+		&& reportType != "bug" && reportType != "vulnerability")
+	{
+		LOGWARNING("Refusing unsupported diagnostic report type: " + reportType);
+		return false;
+	}
+
+	// Security reports deliberately carry no project/crash/diagnostic attachment.
+	// Enforce that in the transport as well as in the Pleiades UI and PHP relay.
+	const bool securityReport = reportType == "vulnerability";
+	const Array<File> filesToUpload = securityReport ? Array<File>() : diagnosticFiles;
+	const File sessionToUpload = securityReport ? File() : sessionFile;
+	includeCrashArtifacts = includeCrashArtifacts && !securityReport;
+
+	const auto currentTime = Time::getCurrentTime();
+	String timezone = currentTime.getTimeZone();
+	String osName = SystemStats::getOperatingSystemName();
+#if JUCE_LINUX
+	const File timezoneFile("/etc/timezone");
+	if (timezoneFile.existsAsFile())
+		timezone = timezoneFile.loadFileAsString().trim();
+
+	const File osReleaseFile("/etc/os-release");
+	if (osReleaseFile.existsAsFile())
+	{
+		StringArray lines;
+		lines.addLines(osReleaseFile.loadFileAsString());
+		for (const auto& line : lines)
+		{
+			if (!line.startsWith("PRETTY_NAME="))
+				continue;
+
+			auto value = line.fromFirstOccurrenceOf("=", false, false).trim();
+			if (value.length() >= 2
+				&& ((value.startsWithChar('"') && value.endsWithChar('"'))
+					|| (value.startsWithChar('\'') && value.endsWithChar('\''))))
+				value = value.substring(1, value.length() - 1);
+
+			if (value.isNotEmpty())
+				osName = value;
+			break;
+		}
+	}
+#endif
+	String channel =
+#if JUCE_DEBUG
+		"debug";
+#else
+		getAppVersion().containsChar('b') ? "beta" : "stable";
+#endif
+	if (auto* settings = GlobalSettings::getInstance())
+	{
+		if (settings->updateChannel != nullptr)
+		{
+			const String selectedChannel = settings->updateChannel->getValueData().toString();
+			if (selectedChannel == "stableversion")
+				channel = "stable";
+			else if (selectedChannel == "betaversion")
+				channel = "beta";
+			else if (selectedChannel.isNotEmpty())
+				channel = "custom";
+		}
+	}
+
+	std::time_t utcTime = std::time(nullptr);
+	std::tm utc = {};
+#if JUCE_WINDOWS
+	gmtime_s(&utc, &utcTime);
+#else
+	gmtime_r(&utcTime, &utc);
+#endif
+	char utcBuffer[32] = {};
+	std::strftime(utcBuffer, sizeof(utcBuffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+
+	const String effectiveReportId = reportId.isNotEmpty() ? reportId : Uuid().toString();
+
+	var metadata(new DynamicObject());
+	auto* metadataObject = metadata.getDynamicObject();
+	metadataObject->setProperty("schema_version", 1);
+	metadataObject->setProperty("report_type", reportType);
+	metadataObject->setProperty("report_id", effectiveReportId);
+	if (sourceMetadata.isObject())
+		metadataObject->setProperty("source_report", sourceMetadata);
+	metadataObject->setProperty("timestamp_utc", String(utcBuffer));
+	metadataObject->setProperty("timestamp_local", currentTime.toISO8601(true));
+	metadataObject->setProperty("username", SystemStats::getFullUserName());
+	metadataObject->setProperty("hostname", SystemStats::getComputerName());
+	metadataObject->setProperty("timezone", timezone);
+	metadataObject->setProperty("utc_offset", currentTime.getUTCOffsetString(true));
+
+	var application(new DynamicObject());
+	application.getDynamicObject()->setProperty("version", getAppVersion());
+	application.getDynamicObject()->setProperty("channel", channel);
+#ifdef AUGMENTA_BUILD_NUMBER
+	application.getDynamicObject()->setProperty("build_number", AUGMENTA_BUILD_NUMBER);
+#endif
+	metadataObject->setProperty("application", application);
+
+	var system(new DynamicObject());
+	system.getDynamicObject()->setProperty("os", osName);
+#if JUCE_LINUX
+	struct utsname uts = {};
+	if (uname(&uts) == 0)
+	{
+		system.getDynamicObject()->setProperty("kernel", String(uts.release));
+		system.getDynamicObject()->setProperty("architecture", String(uts.machine));
+	}
+#endif
+	metadataObject->setProperty("system", system);
+
+	// Keep the native crash path conservative: app-specific metadata providers may
+	// traverse engine/license state that is not safe after an arbitrary process fault.
+	if (reportType != "crash" && additionalMetadataProvider)
+	{
+		try
+		{
+			const var context = additionalMetadataProvider();
+			if (!context.isVoid())
+				metadataObject->setProperty("application_context", context);
+		}
+		catch (...)
+		{
+			LOGWARNING("Could not collect optional report application context");
+		}
+	}
+
+	auto failAndCache = [&]()
+	{
+		if (cacheOnFailure)
+			cacheFailedReport(reportType, message, effectiveReportId, metadata,
+				filesToUpload, sessionToUpload, includeCrashArtifacts);
+		return false;
+	};
+
+	if (remoteURL.isEmpty())
+		return failAndCache();
+
+	URL url = remoteURL.withParameter("username", SystemStats::getFullUserName().replace(" ", "-"))
+		.withParameter("os", osName.replace(" ", "-"))
+		.withParameter("version", getAppVersion())
+		.withParameter("message", message)
+		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
+		.withParameter("test", (reportType == "crash" && isTestCrash) ? "1" : "0")
+		.withParameter("report_type", reportType)
+		.withParameter("report_id", effectiveReportId)
+		.withParameter("metadata", JSON::toString(metadata, true))
+		.withParameter("branch", channel);
+
+	if (includeCrashArtifacts && dumpFile.existsAsFile())
+		url = url.withFileToUpload("dumpFile", dumpFile, "application/octet-stream");
+
+	if (includeCrashArtifacts && traceFile.existsAsFile())
+		url = url.withFileToUpload("traceFile", traceFile, "text/plain");
+
+	if (sessionToUpload.existsAsFile())
+		url = url.withFileToUpload("sessionFile", sessionToUpload, "application/octet-stream");
+
+	const int diagnosticCount = jmin(8, filesToUpload.size());
+	for (int i = 0; i < diagnosticCount; ++i)
+	{
+		const auto& file = filesToUpload.getReference(i);
+		if (file.existsAsFile())
+			url = url.withFileToUpload(String("diagnosticFile") + String(i), file, "application/gzip");
+	}
+
+	std::function<bool(int, int)> callbackFunc = std::bind(
+		&CrashDumpUploader::openStreamProgressCallback, this,
+		std::placeholders::_1, std::placeholders::_2);
+	int statusCode = 0;
+
+	URL::InputStreamOptions options = URL::InputStreamOptions(URL::ParameterHandling::inPostData)
+		.withExtraHeaders("Cache-Control: no-cache")
+		.withProgressCallback(callbackFunc)
+		.withStatusCode(&statusCode)
+		.withConnectionTimeoutMs(5000);
+
+	std::unique_ptr<InputStream> stream(URL(url).createInputStream(options));
+	if (stream == nullptr || (statusCode != 0 && (statusCode < 200 || statusCode >= 300)))
+	{
+		LOGWARNING("Failed to upload " + reportType + " report, status code = " + String(statusCode));
+		return failAndCache();
+	}
+
+	const String response = stream->readEntireStreamAsString();
+#if JUCE_DEBUG
+	LOG("Received : " << response);
+#endif
+	if (response.trim() != "ok")
+	{
+		LOGWARNING("Error from diagnostic report server: " + response);
+		return failAndCache();
+	}
+
+	LOG(reportType + " report uploaded successfully");
+	if (flushPendingAfterSuccess)
+		retryQueuedReports();
+	return true;
+}
+
+File CrashDumpUploader::getPendingReportRoot() const
+{
+	return File::getSpecialLocation(File::userApplicationDataDirectory)
+		.getChildFile(getApp().getApplicationName())
+		.getChildFile("pending-reports");
+}
+
+void CrashDumpUploader::cacheFailedReport(const String& reportType,
+	const String& message,
+	const String& reportId,
+	const var& originalMetadata,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	bool includeCrashArtifacts)
+{
+	const File root = getPendingReportRoot();
+	if (!root.createDirectory().wasOk())
+	{
+		LOGWARNING("Could not create pending report directory");
+		return;
+	}
+
+	const File directory = root.getChildFile(File::createLegalFileName(reportId));
+	if (!directory.createDirectory().wasOk())
+	{
+		LOGWARNING("Could not create pending report entry");
+		return;
+	}
+
+	auto copy = [directory](const File& source, const String& name)
+	{
+		constexpr int64 maxCachedAttachmentBytes = 80LL * 1024LL * 1024LL;
+		if (!source.existsAsFile() || source.getSize() > maxCachedAttachmentBytes)
+			return;
+		const File destination = directory.getChildFile(name);
+		destination.deleteFile();
+		source.copyFileTo(destination);
+	};
+
+	if (includeCrashArtifacts)
+	{
+		copy(traceFile, "trace" + traceFile.getFileExtension());
+		copy(dumpFile, "dump" + dumpFile.getFileExtension());
+	}
+	copy(sessionFile, "session" + sessionFile.getFileExtension());
+	for (int i = 0; i < diagnosticFiles.size(); ++i)
+		copy(diagnosticFiles.getReference(i),
+			"diagnostic-" + String(i) + diagnosticFiles.getReference(i).getFileExtension());
+
+	var manifest(new DynamicObject());
+	auto* object = manifest.getDynamicObject();
+	object->setProperty("schema_version", 1);
+	object->setProperty("created_ms", Time::currentTimeMillis());
+	object->setProperty("report_type", reportType);
+	object->setProperty("report_id", reportId);
+	object->setProperty("message", message);
+	object->setProperty("contact_email", contactEmail);
+	object->setProperty("include_crash_artifacts", includeCrashArtifacts);
+	object->setProperty("original_metadata", originalMetadata);
+
+	const File manifestFile = directory.getChildFile("report.json");
+	if (!manifestFile.replaceWithText(JSON::toString(manifest, true)))
+	{
+		LOGWARNING("Could not persist pending report manifest");
+		directory.deleteRecursively();
+		return;
+	}
+
+	LOG("Cached " + reportType + " report " + reportId + " for retry");
+
+	// Keep offline retry storage bounded. Ten approved reports cover normal
+	// transient outages without allowing months of failures to grow unbounded.
+	Array<File> pending;
+	root.findChildFiles(pending, File::findDirectories, false);
+	while (pending.size() > 10)
+	{
+		int oldest = -1;
+		for (int i = 0; i < pending.size(); ++i)
+		{
+			if (pending[i] == directory)
+				continue;
+			if (oldest < 0 || pending[i].getLastModificationTime() < pending[oldest].getLastModificationTime())
+				oldest = i;
+		}
+		if (oldest < 0)
+			break;
+		pending[oldest].deleteRecursively();
+		pending.remove(oldest);
+	}
+}
+
+void CrashDumpUploader::retryQueuedReports()
+{
+	const File root = getPendingReportRoot();
+	if (!root.isDirectory())
+		return;
+
+	Array<File> directories;
+	root.findChildFiles(directories, File::findDirectories, false);
+	const int64 nowMs = Time::currentTimeMillis();
+	constexpr int64 maxAgeMs = 180LL * 24LL * 60LL * 60LL * 1000LL;
+
+	for (const auto& directory : directories)
+	{
+		if (threadShouldExit())
+			break;
+
+		const File manifestFile = directory.getChildFile("report.json");
+		const var manifest = manifestFile.existsAsFile() ? JSON::parse(manifestFile.loadFileAsString()) : var();
+		if (!manifest.isObject())
+		{
+			directory.deleteRecursively();
+			continue;
+		}
+
+		const int64 createdMs = (int64) manifest.getProperty("created_ms", (int64) 0);
+		if (createdMs > 0 && nowMs - createdMs > maxAgeMs)
+		{
+			directory.deleteRecursively();
+			continue;
+		}
+
+		const String type = manifest.getProperty("report_type", "").toString();
+		if (type != "crash" && type != "freeze" && type != "bug" && type != "vulnerability")
+			continue;
+
+		const String id = manifest.getProperty("report_id", directory.getFileName()).toString();
+		const String queuedMessage = manifest.getProperty("message", "No message").toString();
+		const String queuedEmail = manifest.getProperty("contact_email", "").toString();
+		const bool includeCrash = (bool) manifest.getProperty("include_crash_artifacts", false);
+		const var originalMetadata = manifest.getProperty("original_metadata", var());
+
+		Array<File> files;
+		directory.findChildFiles(files, File::findFiles, false, "diagnostic-*");
+
+		Array<File> sessions;
+		directory.findChildFiles(sessions, File::findFiles, false, "session*");
+		const File session = sessions.isEmpty() ? File() : sessions.getFirst();
+
+		Array<File> traces;
+		Array<File> dumps;
+		directory.findChildFiles(traces, File::findFiles, false, "trace*");
+		directory.findChildFiles(dumps, File::findFiles, false, "dump*");
+
+		const File previousTrace = traceFile;
+		const File previousDump = dumpFile;
+		const String previousEmail = contactEmail;
+		traceFile = traces.isEmpty() ? File() : traces.getFirst();
+		dumpFile = dumps.isEmpty() ? File() : dumps.getFirst();
+		contactEmail = queuedEmail;
+
+		const bool sent = uploadReport(type, queuedMessage, files, session, includeCrash,
+			id, originalMetadata, false, false);
+
+		traceFile = previousTrace;
+		dumpFile = previousDump;
+		contactEmail = previousEmail;
+
+		if (sent)
+			directory.deleteRecursively();
+		else
+			break; // usually means offline; avoid one full timeout per queued report
+	}
+}
+
+bool CrashDumpUploader::uploadReportAsync(const String& reportType,
+	const String& message,
+	const Array<File>& diagnosticFiles,
+	File sessionFile,
+	const String& reportId,
+	var sourceMetadata,
+	std::function<void(bool)> completion)
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::Report;
+	asyncReportType = reportType;
+	asyncMessage = message;
+	asyncDiagnosticFiles = diagnosticFiles;
+	asyncSessionFile = sessionFile;
+	asyncReportId = reportId;
+	asyncSourceMetadata = sourceMetadata;
+	asyncCompletion = std::move(completion);
+	startThread();
+	return true;
+}
+
+bool CrashDumpUploader::retryQueuedReportsAsync()
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::QueuedReports;
+	startThread();
+	return true;
+}
+
+bool CrashDumpUploader::uploadPendingDiagnosticsAsync()
+{
+	if (isThreadRunning())
+		return false;
+
+	asyncWork = AsyncWork::PendingDiagnostics;
+	startThread();
+	return true;
+}
+
+void CrashDumpUploader::uploadPendingDiagnostics()
+{
+	retryQueuedReports();
+
+	if (!diagnosticFilesProvider)
+		return;
+
+	const auto files = diagnosticFilesProvider();
+	for (const auto& file : files)
+	{
+		if (threadShouldExit())
+			break;
+		if (!file.existsAsFile())
+			continue;
+
+		Array<File> singleFile;
+		singleFile.add(file);
+		const File session = diagnosticSessionProvider ? diagnosticSessionProvider() : File();
+		const File reportFile = file.getParentDirectory().getChildFile("report.json");
+		var sourceMetadata;
+		if (reportFile.existsAsFile())
+			sourceMetadata = JSON::parse(reportFile.loadFileAsString());
+
+		const String reportId = file.getParentDirectory().getFileName();
+		const bool sent = uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false,
+			reportId, sourceMetadata, false, false);
+		if (!sent)
+			break; // avoid one network timeout per pending freeze while offline
+		if (diagnosticFilesSentCallback)
+			diagnosticFilesSentCallback(singleFile);
+	}
 }
 
 bool CrashDumpUploader::openStreamProgressCallback(int bytesDownloaded, int totalLength)
 {
-	progress.setValue(bytesDownloaded * 1.0f / totalLength);
+	if (totalLength > 0)
+		progress.setValue(bytesDownloaded * 1.0f / totalLength);
 	LOG("Progress " << (int)(progress.floatValue() * 100) << "%");
 	return !threadShouldExit();
 }
@@ -267,6 +639,33 @@ void CrashDumpUploader::exitApp()
 
 void CrashDumpUploader::run()
 {
+	if (asyncWork == AsyncWork::Report)
+	{
+		const bool success = uploadReport(asyncReportType, asyncMessage, asyncDiagnosticFiles,
+			asyncSessionFile, false, asyncReportId, asyncSourceMetadata);
+		auto completion = std::move(asyncCompletion);
+		asyncDiagnosticFiles.clear();
+		asyncSourceMetadata = {};
+		asyncWork = AsyncWork::Crash;
+		if (completion)
+			MessageManager::callAsync([completion, success]() { completion(success); });
+		return;
+	}
+
+	if (asyncWork == AsyncWork::QueuedReports)
+	{
+		retryQueuedReports();
+		asyncWork = AsyncWork::Crash;
+		return;
+	}
+
+	if (asyncWork == AsyncWork::PendingDiagnostics)
+	{
+		uploadPendingDiagnostics();
+		asyncWork = AsyncWork::Crash;
+		return;
+	}
+
 	uploadCrash();
 	MessageManager::getInstance()->stopDispatchLoop();
 }
@@ -363,6 +762,10 @@ CrashDumpUploader::UploadWindow::UploadWindow() :
 
 	addAndMakeVisible(mail);
 
+	includeProjectBT.setButtonText("Include the recovered project file");
+	includeProjectBT.setToggleState(true, dontSendNotification);
+	addAndMakeVisible(includeProjectBT);
+
 	addAndMakeVisible(&editor);
 	editor.setColour(editor.backgroundColourId, BG_COLOR.brighter(.3f));
 	editor.setColour(editor.textColourId, TEXT_COLOR.brighter());
@@ -403,6 +806,7 @@ void CrashDumpUploader::UploadWindow::resized()
 	progressUI.setBounds(r.removeFromBottom(30).reduced(20, 5));
 
 	mail.setBounds(r.removeFromTop(30).reduced(20, 0));
+	includeProjectBT.setBounds(r.removeFromTop(30).reduced(20, 0));
 
 	editor.setBounds(r.reduced(20));
 }
@@ -420,6 +824,7 @@ void CrashDumpUploader::UploadWindow::buttonClicked(Button* bt)
 	CrashDumpUploader::getInstance()->uploadFile = bt == &autoReopenBT || bt == &okBT;
 	CrashDumpUploader::getInstance()->crashMessage = editor.getText();
 	CrashDumpUploader::getInstance()->contactEmail = mail.getText();
+	CrashDumpUploader::getInstance()->includeProjectFile = includeProjectBT.getToggleState();
 	CrashDumpUploader::getInstance()->crashAction = (bt == &autoReopenBT || bt == &recoverOnlyBT) ? GlobalSettings::RECOVER : GlobalSettings::KILL;
 
 
