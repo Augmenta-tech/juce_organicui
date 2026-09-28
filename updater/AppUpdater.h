@@ -77,10 +77,21 @@ public:
 	juce::String latestVersion;
 	juce::Value updateAvailable;
 
+	juce::String stableVersion;
+	juce::String betaVersion;
+	juce::Value stableUpdateAvailable;
+	juce::Value betaUpdateAvailable;
+	juce::String notificationChannel;
+	juce::String notificationVersion;
+	juce::Value notificationAvailable;
+
 	std::unique_ptr<UpdateDialogWindow> updateWindow;
 	std::unique_ptr<FloatParameter> progression;
 
 	std::unique_ptr<juce::URL::DownloadTask> downloadTask;
+	juce::String activeDownloadURL;
+	juce::String activeChecksumURL;
+	bool activeCustomInstall = false;
 
 	void setURLs(juce::StringRef _updateURL, juce::StringRef _downloadURLBase, juce::StringRef filePrefix);
 
@@ -91,9 +102,12 @@ public:
 
 	void showDialog(juce::StringRef version, bool beta, juce::StringRef title, juce::StringRef msg, juce::StringRef changelog);
 	void downloadUpdate();
+	bool prepareUpdateForChannel(juce::StringRef channel);
+	bool installPreparedUpdateForChannel(juce::StringRef channel);
+	juce::Result installCustomUpdate(juce::StringRef source);
+	bool customInstallSupported() const;
 
-	/// @brief Update targetChannel, latestVersion and updateAvailable after checking online
-	/// @return true if there was no error
+	/// Refresh Stable/Beta metadata, current-channel state and notification candidate.
 	bool updateTargetChannelLatestVersionAndUpdateAvailable();
 
 	// Inherited via Thread
