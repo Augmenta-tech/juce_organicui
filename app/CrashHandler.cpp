@@ -428,6 +428,7 @@ void CrashDumpUploader::cacheFailedReport(const String& reportType,
 	if (!manifestFile.replaceWithText(JSON::toString(manifest, true)))
 	{
 		LOGWARNING("Could not persist pending report manifest");
+		directory.deleteRecursively();
 		return;
 	}
 
@@ -439,10 +440,16 @@ void CrashDumpUploader::cacheFailedReport(const String& reportType,
 	root.findChildFiles(pending, File::findDirectories, false);
 	while (pending.size() > 10)
 	{
-		int oldest = 0;
-		for (int i = 1; i < pending.size(); ++i)
-			if (pending[i].getLastModificationTime() < pending[oldest].getLastModificationTime())
+		int oldest = -1;
+		for (int i = 0; i < pending.size(); ++i)
+		{
+			if (pending[i] == directory)
+				continue;
+			if (oldest < 0 || pending[i].getLastModificationTime() < pending[oldest].getLastModificationTime())
 				oldest = i;
+		}
+		if (oldest < 0)
+			break;
 		pending[oldest].deleteRecursively();
 		pending.remove(oldest);
 	}
@@ -467,7 +474,10 @@ void CrashDumpUploader::retryQueuedReports()
 		const File manifestFile = directory.getChildFile("report.json");
 		const var manifest = manifestFile.existsAsFile() ? JSON::parse(manifestFile.loadFileAsString()) : var();
 		if (!manifest.isObject())
+		{
+			directory.deleteRecursively();
 			continue;
+		}
 
 		const int64 createdMs = (int64) manifest.getProperty("created_ms", (int64) 0);
 		if (createdMs > 0 && nowMs - createdMs > maxAgeMs)
@@ -586,12 +596,12 @@ void CrashDumpUploader::uploadPendingDiagnostics()
 			sourceMetadata = JSON::parse(reportFile.loadFileAsString());
 
 		const String reportId = file.getParentDirectory().getFileName();
-		if (uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false,
-			reportId, sourceMetadata, false, false)
-			&& diagnosticFilesSentCallback)
-		{
+		const bool sent = uploadReport("freeze", "Automatic watchdog freeze diagnostic", singleFile, session, false,
+			reportId, sourceMetadata, false, false);
+		if (!sent)
+			break; // avoid one network timeout per pending freeze while offline
+		if (diagnosticFilesSentCallback)
 			diagnosticFilesSentCallback(singleFile);
-		}
 	}
 }
 
