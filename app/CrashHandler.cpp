@@ -145,7 +145,6 @@ void CrashDumpUploader::uploadCrash()
 		.withParameter("version", getAppVersion())
 		.withParameter("message", crashMessage.isNotEmpty() ? crashMessage : "No message")
 		.withParameter("email", contactEmail.isNotEmpty() ? contactEmail : "")
-		.withParameter("test", isTestCrash ? "1" : "0")
 #if JUCE_DEBUG
 		.withParameter("branch", "debug")
 #else
