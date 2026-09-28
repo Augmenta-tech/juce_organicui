@@ -277,7 +277,9 @@ bool CrashDumpUploader::uploadReport(const String& reportType,
 #endif
 	metadataObject->setProperty("system", system);
 
-	if (additionalMetadataProvider)
+	// Keep the native crash path conservative: app-specific metadata providers may
+	// traverse engine/license state that is not safe after an arbitrary process fault.
+	if (reportType != "crash" && additionalMetadataProvider)
 	{
 		try
 		{
