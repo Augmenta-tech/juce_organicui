@@ -645,7 +645,7 @@ void CrashDumpUploader::run()
 			asyncSessionFile, false, asyncReportId, asyncSourceMetadata);
 		auto completion = std::move(asyncCompletion);
 		asyncDiagnosticFiles.clear();
-		asyncSourceMetadata = {};
+		asyncSourceMetadata = var();
 		asyncWork = AsyncWork::Crash;
 		if (completion)
 			MessageManager::callAsync([completion, success]() { completion(success); });
